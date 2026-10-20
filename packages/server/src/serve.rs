@@ -10,7 +10,10 @@ use deadpool_postgres::{BuildError, PoolError};
 use tokio::net::TcpListener;
 use tokio::signal::ctrl_c;
 use tokio::signal::unix::{Signal, SignalKind, signal};
+use tokio::sync::oneshot;
+use tokio::task::JoinError;
 
+use crate::access::AccessLog;
 use crate::config::{Config, ConfigError};
 use crate::database::DatabaseArgs;
 use crate::http;
@@ -49,10 +52,16 @@ impl ServeArgs {
                 source,
             })?;
         tracing::info!(address = %self.listen, "listening");
-        axum::serve(listener, http::router(pool, Arc::new(caches)))
+
+        let access = Arc::new(AccessLog::default());
+        let (stop, stopped) = oneshot::channel();
+        let recorder = tokio::spawn(Arc::clone(&access).run(pool.clone(), stopped));
+        let served = axum::serve(listener, http::router(pool, Arc::new(caches), access))
             .with_graceful_shutdown(shutdown(terminate))
-            .await
-            .map_err(ServeError::Serve)
+            .await;
+        drop(stop);
+        recorder.await.map_err(ServeError::Recorder)?;
+        served.map_err(ServeError::Serve)
     }
 }
 
@@ -80,6 +89,9 @@ pub(crate) enum ServeError {
     /// Creating the connection pool failed.
     #[error("failed to create the database pool")]
     Pool(#[source] BuildError),
+    /// The task that records reads failed.
+    #[error("the read recorder failed")]
+    Recorder(#[source] JoinError),
     /// Serving HTTP failed.
     #[error("failed to serve HTTP")]
     Serve(#[source] io::Error),

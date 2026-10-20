@@ -12,6 +12,7 @@ version.workspace = true
 
 [dependencies]
 axum = { workspace = true, features = ["http1", "tokio"] }
+calf-granary-server-db = { workspace = true, features = ["deadpool"] }
 deadpool-postgres = { workspace = true, features = ["rt_tokio_1"] }
 object_store = { workspace = true, features = ["aws"] }
 serde = { workspace = true, features = ["derive", "std"] }
@@ -26,7 +27,7 @@ features = ["derive", "env", "error-context", "help", "std", "usage"]
 
 [dependencies.tokio]
 workspace = true
-features = ["macros", "net", "rt-multi-thread", "signal"]
+features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"]
 
 [dependencies.tracing-subscriber]
 workspace = true

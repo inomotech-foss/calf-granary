@@ -48,7 +48,7 @@ impl Config {
             .iter()
             .filter(|(_, cache)| cache.fallback.is_none())
         {
-            caches.insert(name.clone(), Arc::new(Cache::new(cache.store(name)?, None)));
+            caches.insert(name.clone(), Arc::new(cache.connect(name, None)?));
         }
         for (name, cache) in &self.caches {
             let Some(fallback) = &cache.fallback else {
@@ -61,8 +61,7 @@ impl Config {
                     cache: name.clone(),
                     fallback: fallback.clone(),
                 })?;
-            let store = cache.store(name)?;
-            caches.insert(name.clone(), Arc::new(Cache::new(store, Some(fallback))));
+            caches.insert(name.clone(), Arc::new(cache.connect(name, Some(fallback))?));
         }
         Ok(Caches::new(caches))
     }
@@ -82,7 +81,11 @@ struct CacheConfig {
 
 impl CacheConfig {
     /// Creates the client for the bucket.
-    fn store(&self, name: &CacheName) -> Result<Arc<dyn ObjectStore>, ConfigError> {
+    fn connect(
+        &self,
+        name: &CacheName,
+        fallback: Option<Arc<Cache>>,
+    ) -> Result<Cache, ConfigError> {
         let store = AmazonS3Builder::from_env()
             .with_bucket_name(&self.bucket)
             .build()
@@ -90,10 +93,18 @@ impl CacheConfig {
                 cache: name.clone(),
                 source,
             })?;
-        Ok(match &self.prefix {
-            Some(prefix) => Arc::new(PrefixStore::new(store, Path::from(prefix.as_str()))),
-            None => Arc::new(store),
-        })
+        let prefix = self.prefix.as_deref().map(Path::from).unwrap_or_default();
+        let store: Arc<dyn ObjectStore> = if prefix.as_ref().is_empty() {
+            Arc::new(store)
+        } else {
+            Arc::new(PrefixStore::new(store, prefix.clone()))
+        };
+        Ok(Cache::new(
+            self.bucket.as_str().into(),
+            prefix,
+            store,
+            fallback,
+        ))
     }
 }
 

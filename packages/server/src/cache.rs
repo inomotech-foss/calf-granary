@@ -85,10 +85,33 @@ pub(crate) struct InvalidObjectKey {
     key: String,
 }
 
+/// An object identified by its bucket and its full key in the bucket.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct StoredObject {
+    /// The bucket.
+    pub(crate) bucket: Arc<str>,
+    /// The key in the bucket, including the cache's prefix.
+    pub(crate) key: Path,
+}
+
+/// An object found in a cache.
+#[derive(Debug)]
+pub(crate) struct Hit {
+    /// Where the object was found.
+    pub(crate) object: StoredObject,
+    /// The object's metadata and, unless only the metadata was requested,
+    /// its content.
+    pub(crate) result: GetResult,
+}
+
 /// A cache backed by object storage.
 #[derive(Debug)]
 pub(crate) struct Cache {
-    /// Where the objects are stored.
+    /// The bucket that holds the objects.
+    bucket: Arc<str>,
+    /// The key prefix of the objects in the bucket.
+    prefix: Path,
+    /// The bucket, limited to the prefix.
     store: Arc<dyn ObjectStore>,
     /// The cache to read from when an object is missing here.
     fallback: Option<Arc<Self>>,
@@ -96,8 +119,20 @@ pub(crate) struct Cache {
 
 impl Cache {
     /// Creates a cache.
-    pub(crate) const fn new(store: Arc<dyn ObjectStore>, fallback: Option<Arc<Self>>) -> Self {
-        Self { store, fallback }
+    ///
+    /// The store must already be limited to `prefix`.
+    pub(crate) const fn new(
+        bucket: Arc<str>,
+        prefix: Path,
+        store: Arc<dyn ObjectStore>,
+        fallback: Option<Arc<Self>>,
+    ) -> Self {
+        Self {
+            bucket,
+            prefix,
+            store,
+            fallback,
+        }
     }
 
     /// Fetches an object, trying the fallback cache when it's missing here.
@@ -108,9 +143,9 @@ impl Cache {
         &self,
         key: &ObjectKey,
         head: bool,
-    ) -> Result<Option<GetResult>, object_store::Error> {
-        if let Some(result) = self.get_here(key, head).await? {
-            return Ok(Some(result));
+    ) -> Result<Option<Hit>, object_store::Error> {
+        if let Some(hit) = self.get_here(key, head).await? {
+            return Ok(Some(hit));
         }
         match &self.fallback {
             Some(fallback) => fallback.get_here(key, head).await,
@@ -123,12 +158,23 @@ impl Cache {
         &self,
         key: &ObjectKey,
         head: bool,
-    ) -> Result<Option<GetResult>, object_store::Error> {
+    ) -> Result<Option<Hit>, object_store::Error> {
         let options = GetOptions::new().with_head(head);
         match self.store.get_opts(&key.0, options).await {
-            Ok(result) => Ok(Some(result)),
+            Ok(result) => Ok(Some(Hit {
+                object: self.object(key),
+                result,
+            })),
             Err(object_store::Error::NotFound { path: _, source: _ }) => Ok(None),
             Err(err) => Err(err),
+        }
+    }
+
+    /// Identifies an object of this cache in its bucket.
+    fn object(&self, key: &ObjectKey) -> StoredObject {
+        StoredObject {
+            bucket: Arc::clone(&self.bucket),
+            key: self.prefix.parts().chain(key.0.parts()).collect(),
         }
     }
 }

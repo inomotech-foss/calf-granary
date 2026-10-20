@@ -172,6 +172,7 @@ name = "calf-granary-server"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "calf-granary-server-db",
  "clap",
  "deadpool-postgres",
  "object_store",
