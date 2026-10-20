@@ -11,6 +11,12 @@
       imports = [
         ephemeris.presets.inomotech
         ./ephemeris.nix
+        ./nix/rust-packages.nix
       ];
+
+      granary.ephemeris.rust.packages = {
+        calf-granary-client = { };
+        calf-granary-server = { };
+      };
     };
 }
