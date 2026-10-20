@@ -19,6 +19,21 @@
         ./nix/rust-packages.nix
       ];
 
+      granary.ephemeris.cornucopia = {
+        enable = true;
+        migrations = "packages/server/migrations";
+        queries = "packages/server/queries";
+        destination = "packages/server-db";
+        name = "calf-granary-server-db";
+        description = "Generated Postgres bindings for the server queries";
+        keywords = [
+          "cache"
+          "ci"
+          "nix"
+          "yocto"
+        ];
+      };
+
       granary.ephemeris.rust.packages = {
         calf-granary-client = { };
         calf-granary-server = { };

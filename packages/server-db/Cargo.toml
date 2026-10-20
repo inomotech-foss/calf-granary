@@ -1,0 +1,51 @@
+# This file was generated with `cornucopia`. Do not modify.
+
+[package]
+name = "calf-granary-server-db"
+edition = "2024"
+rust-version = "1.85"
+description = "Generated Postgres bindings for the server queries"
+keywords = ["cache", "ci", "nix", "yocto"]
+categories = ["database"]
+
+[package.version]
+workspace = true
+
+[package.readme]
+workspace = true
+
+[package.license]
+workspace = true
+
+[package.repository]
+workspace = true
+
+[dependencies.chrono]
+workspace = true
+
+[dependencies.deadpool-postgres]
+optional = true
+workspace = true
+
+[dependencies.futures]
+workspace = true
+
+[dependencies.postgres]
+features = ["with-chrono-0_4"]
+optional = true
+workspace = true
+
+[dependencies.postgres-protocol]
+workspace = true
+
+[dependencies.postgres-types]
+features = ["derive"]
+workspace = true
+
+[dependencies.tokio-postgres]
+features = ["with-chrono-0_4"]
+workspace = true
+
+[features]
+deadpool = ["dep:deadpool-postgres", "tokio-postgres/default"]
+default = ["dep:postgres", "deadpool"]
