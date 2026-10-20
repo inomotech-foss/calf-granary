@@ -10,7 +10,7 @@ use tokio::signal::ctrl_c;
 use tokio::signal::unix::{Signal, SignalKind, signal};
 
 use crate::database::DatabaseArgs;
-use crate::http::AppState;
+use crate::http;
 use crate::migrations::{self, MigrationError};
 
 /// Command-line arguments of the `serve` command.
@@ -42,7 +42,7 @@ impl ServeArgs {
                 source,
             })?;
         tracing::info!(address = %self.listen, "listening");
-        axum::serve(listener, AppState::new(pool).router())
+        axum::serve(listener, http::router(pool))
             .with_graceful_shutdown(shutdown(terminate))
             .await
             .map_err(ServeError::Serve)
