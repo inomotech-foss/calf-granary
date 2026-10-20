@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use tokio_postgres::{Client, Transaction};
+use tokio_postgres::{Client, GenericClient, Transaction};
 
 /// Every migration, in the order it is applied.
 const MIGRATIONS: &[Migration] = &[Migration {
@@ -71,13 +71,17 @@ struct Applied {
 }
 
 impl Applied {
-    /// Reads the ledger, creating it first if it doesn't exist.
-    async fn read(transaction: &Transaction<'_>) -> Result<Vec<Self>, MigrationError> {
-        transaction
-            .batch_execute(CREATE_LEDGER)
+    /// Reads the ledger. A missing ledger means that nothing was applied.
+    async fn read<C: GenericClient + Sync>(client: &C) -> Result<Vec<Self>, MigrationError> {
+        let exists: bool = client
+            .query_one("SELECT to_regclass('schema_migration') IS NOT NULL", &[])
             .await
+            .and_then(|row| row.try_get(0))
             .map_err(MigrationError::Ledger)?;
-        let rows = transaction
+        if !exists {
+            return Ok(Vec::new());
+        }
+        let rows = client
             .query("SELECT version, name, sql FROM schema_migration", &[])
             .await
             .map_err(MigrationError::Ledger)?;
@@ -94,7 +98,47 @@ impl Applied {
     }
 }
 
-/// Errors from applying migrations.
+/// How the embedded migrations relate to the ledger.
+#[derive(Debug, PartialEq, Eq)]
+struct Plan<'a> {
+    /// Embedded migrations that the ledger doesn't list, in order.
+    pending: Vec<&'a Migration>,
+    /// Applied migrations that aren't embedded, in order.
+    unknown: Vec<i32>,
+}
+
+impl<'a> Plan<'a> {
+    /// Compares the embedded migrations with the ledger.
+    ///
+    /// Fails if the ledger lists a migration that differs from the embedded
+    /// one.
+    fn new(migrations: &'a [Migration], applied: &[Applied]) -> Result<Self, MigrationError> {
+        let mut embedded: BTreeMap<i32, &Migration> = migrations
+            .iter()
+            .map(|migration| (migration.version, migration))
+            .collect();
+        let mut unknown = Vec::new();
+        for record in applied {
+            match embedded.remove(&record.version) {
+                Some(migration) if migration.name == record.name && migration.sql == record.sql => {
+                }
+                Some(_) => {
+                    return Err(MigrationError::Modified {
+                        version: record.version,
+                    });
+                }
+                None => unknown.push(record.version),
+            }
+        }
+        unknown.sort_unstable();
+        Ok(Self {
+            pending: embedded.into_values().collect(),
+            unknown,
+        })
+    }
+}
+
+/// Errors from applying or verifying migrations.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum MigrationError {
     /// A migration failed.
@@ -115,6 +159,12 @@ pub(crate) enum MigrationError {
         /// The migration that differs.
         version: i32,
     },
+    /// Migrations are waiting to be applied.
+    #[error("pending migrations: {count}")]
+    Pending {
+        /// How many migrations are pending.
+        count: usize,
+    },
     /// The database has a migration that this binary doesn't know.
     #[error("the database has migration {version}, which this binary doesn't know")]
     Unknown {
@@ -127,47 +177,45 @@ pub(crate) enum MigrationError {
 ///
 /// All migrations run in one transaction that holds an advisory lock, so
 /// concurrent runs wait for each other and a failure leaves the schema as it
-/// was.
+/// was. Fails if the database has migrations from a newer binary.
 pub(crate) async fn migrate(client: &mut Client) -> Result<usize, MigrationError> {
     let transaction = client.transaction().await.map_err(MigrationError::Ledger)?;
     transaction
         .execute("SELECT pg_advisory_xact_lock($1)", &[&LOCK])
         .await
         .map_err(MigrationError::Ledger)?;
+    transaction
+        .batch_execute(CREATE_LEDGER)
+        .await
+        .map_err(MigrationError::Ledger)?;
     let applied = Applied::read(&transaction).await?;
-    let pending = pending(MIGRATIONS, &applied)?;
-    for migration in &pending {
+    let plan = Plan::new(MIGRATIONS, &applied)?;
+    if let Some(&version) = plan.unknown.first() {
+        return Err(MigrationError::Unknown { version });
+    }
+    for migration in &plan.pending {
         migration.apply(&transaction).await?;
     }
     transaction.commit().await.map_err(MigrationError::Ledger)?;
-    Ok(pending.len())
+    Ok(plan.pending.len())
 }
 
-/// Returns the migrations that the ledger doesn't list yet.
+/// Checks that every embedded migration was applied.
 ///
-/// Fails if the ledger lists a migration that differs from the embedded one
-/// or that isn't embedded at all.
-fn pending<'a>(
-    migrations: &'a [Migration],
-    applied: &[Applied],
-) -> Result<Vec<&'a Migration>, MigrationError> {
-    let mut embedded: BTreeMap<i32, &Migration> = migrations
-        .iter()
-        .map(|migration| (migration.version, migration))
-        .collect();
-    for record in applied {
-        let migration = embedded
-            .remove(&record.version)
-            .ok_or(MigrationError::Unknown {
-                version: record.version,
-            })?;
-        if migration.name != record.name || migration.sql != record.sql {
-            return Err(MigrationError::Modified {
-                version: record.version,
-            });
-        }
+/// Migrations from a newer binary are allowed, so the previous release keeps
+/// running while a new one rolls out.
+pub(crate) async fn verify(client: &Client) -> Result<(), MigrationError> {
+    let applied = Applied::read(client).await?;
+    let plan = Plan::new(MIGRATIONS, &applied)?;
+    if !plan.pending.is_empty() {
+        return Err(MigrationError::Pending {
+            count: plan.pending.len(),
+        });
     }
-    Ok(embedded.into_values().collect())
+    for version in plan.unknown {
+        tracing::warn!(version, "the database has a migration from a newer release");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -219,28 +267,31 @@ mod tests {
     }
 
     #[test]
-    fn pending_skips_applied() {
-        let pending = pending(&[FIRST, SECOND], &[applied(&FIRST)]).unwrap();
-        assert_eq!(pending, [&SECOND], "only the second migration is pending");
+    fn plan_lists_pending() {
+        let plan = Plan::new(&[FIRST, SECOND], &[applied(&FIRST)]).unwrap();
+        assert_eq!(
+            plan.pending,
+            [&SECOND],
+            "only the second migration is pending"
+        );
+        assert!(plan.unknown.is_empty(), "every applied migration is known");
     }
 
     #[test]
-    fn pending_rejects_modified() {
+    fn plan_lists_unknown() {
+        let plan = Plan::new(&[FIRST], &[applied(&SECOND), applied(&FIRST)]).unwrap();
+        assert!(plan.pending.is_empty(), "nothing is pending");
+        assert_eq!(plan.unknown, [2], "the second migration is unknown");
+    }
+
+    #[test]
+    fn plan_rejects_modified() {
         let mut record = applied(&FIRST);
         record.sql = "SELECT 3".to_owned();
-        let result = pending(&[FIRST, SECOND], &[record]);
+        let result = Plan::new(&[FIRST, SECOND], &[record]);
         assert!(
             matches!(result, Err(MigrationError::Modified { version: 1 })),
             "a changed migration is rejected"
-        );
-    }
-
-    #[test]
-    fn pending_rejects_unknown() {
-        let result = pending(&[FIRST], &[applied(&FIRST), applied(&SECOND)]);
-        assert!(
-            matches!(result, Err(MigrationError::Unknown { version: 2 })),
-            "a migration from a newer binary is rejected"
         );
     }
 }

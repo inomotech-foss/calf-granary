@@ -1,16 +1,20 @@
 //! Build cache server for CI runners.
 
+mod database;
+mod http;
 mod migrations;
+mod serve;
 
 use core::error::Error;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use tokio_postgres::{Client, Config, NoTls};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
 
+use crate::database::DatabaseArgs;
 use crate::migrations::MigrationError;
+use crate::serve::{ServeArgs, ServeError};
 
 /// Build cache server for CI runners.
 #[derive(Debug, Parser)]
@@ -26,22 +30,25 @@ struct Cli {
 enum Command {
     /// Apply pending database migrations.
     Migrate {
-        /// Postgres connection URL.
-        #[arg(long, env = "GRANARY_DATABASE_URL", hide_env_values = true)]
-        database_url: Config,
+        /// Where to find Postgres.
+        #[command(flatten)]
+        database: DatabaseArgs,
     },
+    /// Serve the caches over HTTP.
+    Serve(ServeArgs),
 }
 
 impl Command {
     /// Runs the command.
     async fn run(self) -> Result<(), CommandError> {
         match self {
-            Self::Migrate { database_url } => {
-                let mut client = connect(&database_url).await?;
+            Self::Migrate { database } => {
+                let mut client = database.connect().await.map_err(CommandError::Connect)?;
                 let count = migrations::migrate(&mut client).await?;
                 tracing::info!(count, "migrations applied");
                 Ok(())
             }
+            Self::Serve(args) => Ok(args.run().await?),
         }
     }
 }
@@ -55,17 +62,9 @@ enum CommandError {
     /// Applying migrations failed.
     #[error(transparent)]
     Migrate(#[from] MigrationError),
-}
-
-/// Connects to Postgres and drives the connection in the background.
-async fn connect(config: &Config) -> Result<Client, CommandError> {
-    let (client, connection) = config.connect(NoTls).await.map_err(CommandError::Connect)?;
-    tokio::spawn(async move {
-        if let Err(err) = connection.await {
-            tracing::error!(error = &err as &dyn Error, "database connection failed");
-        }
-    });
-    Ok(client)
+    /// Serving failed.
+    #[error(transparent)]
+    Serve(#[from] ServeError),
 }
 
 #[tokio::main]

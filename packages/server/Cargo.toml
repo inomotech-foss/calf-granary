@@ -11,14 +11,19 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+axum = { workspace = true, features = ["http1", "tokio"] }
+deadpool-postgres = { workspace = true, features = ["rt_tokio_1"] }
 thiserror = { workspace = true, features = ["std"] }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tokio-postgres = { workspace = true, features = ["runtime"] }
 tracing = { workspace = true, features = ["std"] }
 
 [dependencies.clap]
 workspace = true
 features = ["derive", "env", "error-context", "help", "std", "usage"]
+
+[dependencies.tokio]
+workspace = true
+features = ["macros", "net", "rt-multi-thread", "signal"]
 
 [dependencies.tracing-subscriber]
 workspace = true
