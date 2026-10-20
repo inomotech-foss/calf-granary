@@ -2,6 +2,10 @@
   description = "Build caches for CI runners";
 
   inputs = {
+    cornucopia = {
+      url = "github:inomotech-foss/cornucopia/336224d4815abb555987607a940bbd3769f67f89";
+      inputs.nixpkgs.follows = "ephemeris/nixpkgs";
+    };
     ephemeris.url = "git+https://codeberg.org/inomotech/ephemeris";
   };
 
@@ -11,6 +15,7 @@
       imports = [
         ephemeris.presets.inomotech
         ./ephemeris.nix
+        ./nix/cornucopia.nix
         ./nix/rust-packages.nix
       ];
 
