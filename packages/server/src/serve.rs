@@ -18,6 +18,7 @@ use crate::config::{Config, ConfigError};
 use crate::database::DatabaseArgs;
 use crate::http;
 use crate::migrations::{self, MigrationError};
+use crate::token::TokenKey;
 
 /// Command-line arguments of the `serve` command.
 #[derive(Debug, Args)]
@@ -31,6 +32,9 @@ pub(crate) struct ServeArgs {
     /// Where to find Postgres.
     #[command(flatten)]
     database: DatabaseArgs,
+    /// Secret of at least 32 bytes that signs granary tokens.
+    #[arg(long, env = "GRANARY_TOKEN_SECRET", hide_env_values = true)]
+    token_secret: TokenKey,
 }
 
 impl ServeArgs {
@@ -38,7 +42,9 @@ impl ServeArgs {
     ///
     /// Refuses to start while migrations are pending.
     pub(crate) async fn run(self) -> Result<(), ServeError> {
-        let caches = Config::load(&self.config)?.caches()?;
+        let config = Config::load(&self.config)?;
+        let caches = config.caches()?;
+        let exchange = config.exchange(self.token_secret)?;
         let pool = self.database.pool().map_err(ServeError::Pool)?;
         let client = pool.get().await.map_err(ServeError::Connect)?;
         migrations::verify(&client).await?;
@@ -56,9 +62,12 @@ impl ServeArgs {
         let access = Arc::new(AccessLog::default());
         let (stop, stopped) = oneshot::channel();
         let recorder = tokio::spawn(Arc::clone(&access).run(pool.clone(), stopped));
-        let served = axum::serve(listener, http::router(pool, Arc::new(caches), access))
-            .with_graceful_shutdown(shutdown(terminate))
-            .await;
+        let served = axum::serve(
+            listener,
+            http::router(pool, Arc::new(caches), access, Arc::new(exchange)),
+        )
+        .with_graceful_shutdown(shutdown(terminate))
+        .await;
         drop(stop);
         recorder.await.map_err(ServeError::Recorder)?;
         served.map_err(ServeError::Serve)

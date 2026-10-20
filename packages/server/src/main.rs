@@ -2,11 +2,18 @@
 
 mod access;
 mod cache;
+mod claims;
 mod config;
 mod database;
+mod exchange;
 mod http;
 mod migrations;
+mod oidc;
 mod serve;
+#[cfg(test)]
+mod testing;
+mod tiers;
+mod token;
 
 use core::error::Error;
 use std::process::ExitCode;

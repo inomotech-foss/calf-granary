@@ -1,5 +1,6 @@
 //! The configuration file.
 
+use core::time::Duration;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::{fs, io, path};
@@ -8,10 +9,18 @@ use object_store::ObjectStore;
 use object_store::aws::AmazonS3Builder;
 use object_store::path::Path;
 use object_store::prefix::PrefixStore;
+use reqwest::Client;
 use serde::Deserialize;
 use toml::de::Error as TomlError;
 
 use crate::cache::{Cache, CacheName, Caches};
+use crate::exchange::Exchange;
+use crate::oidc::{Issuer, IssuerConfig};
+use crate::tiers::Tiers;
+use crate::token::TokenKey;
+
+/// How long fetching an issuer's keys may take.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The configuration file.
 ///
@@ -22,6 +31,12 @@ use crate::cache::{Cache, CacheName, Caches};
 pub(crate) struct Config {
     /// The caches by name.
     caches: BTreeMap<CacheName, CacheConfig>,
+    /// The issuers whose ID tokens are accepted, by name.
+    #[serde(default)]
+    issuers: BTreeMap<String, IssuerConfig>,
+    /// The tiers that map ID tokens to the caches they may write.
+    #[serde(default)]
+    tiers: Tiers,
 }
 
 impl Config {
@@ -64,6 +79,34 @@ impl Config {
             caches.insert(name.clone(), Arc::new(cache.connect(name, Some(fallback))?));
         }
         Ok(Caches::new(caches))
+    }
+
+    /// Sets up the token exchange.
+    ///
+    /// Fails if a tier names an unknown cache.
+    pub(crate) fn exchange(self, key: TokenKey) -> Result<Exchange, ConfigError> {
+        for tier in self.tiers.iter() {
+            if let Some(cache) = tier
+                .caches
+                .iter()
+                .find(|cache| !self.caches.contains_key(*cache))
+            {
+                return Err(ConfigError::TierCache {
+                    tier: tier.name.clone(),
+                    cache: cache.clone(),
+                });
+            }
+        }
+        let client = Client::builder()
+            .timeout(FETCH_TIMEOUT)
+            .build()
+            .map_err(ConfigError::HttpClient)?;
+        let issuers = self
+            .issuers
+            .into_values()
+            .map(|issuer| Issuer::new(issuer, client.clone()))
+            .collect();
+        Ok(Exchange::new(issuers, self.tiers, key))
     }
 }
 
@@ -119,6 +162,9 @@ pub(crate) enum ConfigError {
         /// The fallback cache.
         fallback: CacheName,
     },
+    /// The HTTP client for fetching issuer keys can't be created.
+    #[error("failed to create the HTTP client")]
+    HttpClient(#[source] reqwest::Error),
     /// The file isn't valid.
     #[error("failed to parse {}", path.display())]
     Parse {
@@ -136,6 +182,14 @@ pub(crate) enum ConfigError {
         /// The error from the operating system.
         #[source]
         source: io::Error,
+    },
+    /// A tier names an unknown cache.
+    #[error("tier {tier} names the unknown cache {cache}")]
+    TierCache {
+        /// The tier.
+        tier: String,
+        /// The unknown cache.
+        cache: CacheName,
     },
     /// The object storage client can't be created.
     #[error("failed to set up the storage of cache {cache}")]

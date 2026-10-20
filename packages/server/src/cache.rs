@@ -7,15 +7,21 @@ use std::sync::Arc;
 
 use object_store::path::{Path, PathPart};
 use object_store::{GetOptions, GetResult, ObjectStore};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The name of a cache.
 ///
 /// Names consist of lowercase ASCII letters, digits and dashes and start with
 /// a letter or digit. They appear as the first path segment of object URLs.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String")]
 pub(crate) struct CacheName(String);
+
+impl AsRef<str> for CacheName {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
 
 impl Borrow<str> for CacheName {
     fn borrow(&self) -> &str {
