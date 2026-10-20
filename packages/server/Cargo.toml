@@ -13,8 +13,11 @@ version.workspace = true
 [dependencies]
 axum = { workspace = true, features = ["http1", "tokio"] }
 deadpool-postgres = { workspace = true, features = ["rt_tokio_1"] }
+object_store = { workspace = true, features = ["aws"] }
+serde = { workspace = true, features = ["derive", "std"] }
 thiserror = { workspace = true, features = ["std"] }
 tokio-postgres = { workspace = true, features = ["runtime"] }
+toml = { workspace = true, features = ["parse", "serde", "std"] }
 tracing = { workspace = true, features = ["std"] }
 
 [dependencies.clap]
@@ -28,6 +31,9 @@ features = ["macros", "net", "rt-multi-thread", "signal"]
 [dependencies.tracing-subscriber]
 workspace = true
 features = ["ansi", "env-filter", "fmt", "std"]
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }
 
 [lints]
 workspace = true

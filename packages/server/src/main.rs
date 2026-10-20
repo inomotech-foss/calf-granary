@@ -1,5 +1,7 @@
 //! Build cache server for CI runners.
 
+mod cache;
+mod config;
 mod database;
 mod http;
 mod migrations;

@@ -2,6 +2,8 @@
 
 use std::io;
 use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use clap::Args;
 use deadpool_postgres::{BuildError, PoolError};
@@ -9,6 +11,7 @@ use tokio::net::TcpListener;
 use tokio::signal::ctrl_c;
 use tokio::signal::unix::{Signal, SignalKind, signal};
 
+use crate::config::{Config, ConfigError};
 use crate::database::DatabaseArgs;
 use crate::http;
 use crate::migrations::{self, MigrationError};
@@ -16,6 +19,9 @@ use crate::migrations::{self, MigrationError};
 /// Command-line arguments of the `serve` command.
 #[derive(Debug, Args)]
 pub(crate) struct ServeArgs {
+    /// Path to the configuration file.
+    #[arg(long, env = "GRANARY_CONFIG")]
+    config: PathBuf,
     /// Address to listen on.
     #[arg(long, env = "GRANARY_LISTEN", default_value = "[::]:8080")]
     listen: SocketAddr,
@@ -29,6 +35,7 @@ impl ServeArgs {
     ///
     /// Refuses to start while migrations are pending.
     pub(crate) async fn run(self) -> Result<(), ServeError> {
+        let caches = Config::load(&self.config)?.caches()?;
         let pool = self.database.pool().map_err(ServeError::Pool)?;
         let client = pool.get().await.map_err(ServeError::Connect)?;
         migrations::verify(&client).await?;
@@ -42,7 +49,7 @@ impl ServeArgs {
                 source,
             })?;
         tracing::info!(address = %self.listen, "listening");
-        axum::serve(listener, http::router(pool))
+        axum::serve(listener, http::router(pool, Arc::new(caches)))
             .with_graceful_shutdown(shutdown(terminate))
             .await
             .map_err(ServeError::Serve)
@@ -61,6 +68,9 @@ pub(crate) enum ServeError {
         #[source]
         source: io::Error,
     },
+    /// The configuration is invalid.
+    #[error(transparent)]
+    Config(#[from] ConfigError),
     /// Connecting to Postgres failed.
     #[error("failed to connect to the database")]
     Connect(#[source] PoolError),
