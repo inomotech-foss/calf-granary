@@ -1,13 +1,25 @@
 //! Caches and the objects in them.
 
 use core::borrow::Borrow;
+use core::error::Error;
 use core::fmt;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use bytes::Bytes;
+use futures::{Stream, StreamExt as _};
 use object_store::path::{Path, PathPart};
-use object_store::{GetOptions, GetResult, ObjectStore};
+use object_store::{
+    GetOptions, GetResult, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, WriteMultipart,
+};
 use serde::{Deserialize, Serialize};
+
+/// The size of the parts of multipart uploads. Smaller objects are uploaded
+/// in one request.
+const PART_SIZE: usize = 8 * 1024 * 1024;
+
+/// How many parts of one object are uploaded at the same time.
+const PART_CONCURRENCY: usize = 4;
 
 /// The name of a cache.
 ///
@@ -176,6 +188,66 @@ impl Cache {
         }
     }
 
+    /// Stores an object unless this cache already has it.
+    ///
+    /// Returns whether the object was stored. Objects that fit in one part
+    /// are uploaded in one request, larger ones in parts.
+    pub(crate) async fn put<S, E>(&self, key: &ObjectKey, mut body: S) -> Result<bool, PutError>
+    where
+        S: Stream<Item = Result<Bytes, E>> + Unpin + Send,
+        E: Error + Send + Sync + 'static,
+    {
+        if self
+            .get_here(key, true)
+            .await
+            .map_err(PutError::Store)?
+            .is_some()
+        {
+            return Ok(false);
+        }
+        let mut parts = Vec::new();
+        let mut size = 0usize;
+        while size < PART_SIZE {
+            let Some(chunk) = body.next().await else {
+                let payload: PutPayload = parts.into_iter().collect();
+                self.store
+                    .put_opts(&key.0, payload, PutOptions::default())
+                    .await
+                    .map_err(PutError::Store)?;
+                return Ok(true);
+            };
+            let chunk = chunk.map_err(|source| PutError::Body(Box::new(source)))?;
+            size = size.saturating_add(chunk.len());
+            parts.push(chunk);
+        }
+
+        let upload = self
+            .store
+            .put_multipart_opts(&key.0, PutMultipartOptions::default())
+            .await
+            .map_err(PutError::Store)?;
+        let mut writer = WriteMultipart::new_with_chunk_size(upload, PART_SIZE);
+        for part in parts {
+            writer.put(part);
+        }
+        while let Some(chunk) = body.next().await {
+            let chunk = match chunk {
+                Ok(chunk) => chunk,
+                Err(source) => {
+                    writer.abort().await.map_err(PutError::Store)?;
+                    return Err(PutError::Body(Box::new(source)));
+                }
+            };
+            if let Err(err) = writer.wait_for_capacity(PART_CONCURRENCY).await {
+                writer.abort().await.map_err(PutError::Store)?;
+                return Err(PutError::Store(err));
+            }
+            writer.put(chunk);
+        }
+        writer.finish().await.map_err(PutError::Store)?;
+        Ok(true)
+    }
+
     /// Identifies an object of this cache in its bucket.
     fn object(&self, key: &ObjectKey) -> StoredObject {
         StoredObject {
@@ -183,6 +255,17 @@ impl Cache {
             key: self.prefix.parts().chain(key.0.parts()).collect(),
         }
     }
+}
+
+/// Errors from storing an object.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PutError {
+    /// Reading the object from the client failed.
+    #[error("failed to read the object")]
+    Body(#[source] Box<dyn Error + Send + Sync>),
+    /// Object storage failed.
+    #[error("failed to store the object")]
+    Store(#[source] object_store::Error),
 }
 
 /// All caches by name.

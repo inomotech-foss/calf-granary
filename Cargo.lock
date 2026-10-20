@@ -176,9 +176,11 @@ version = "0.1.0"
 dependencies = [
  "aws-lc-rs",
  "axum",
+ "bytes",
  "calf-granary-server-db",
  "clap",
  "deadpool-postgres",
+ "futures",
  "jsonwebtoken",
  "object_store",
  "reqwest",

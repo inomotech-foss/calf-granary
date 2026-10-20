@@ -5,7 +5,9 @@ use core::str::FromStr;
 use core::time::Duration;
 
 use jsonwebtoken::errors::Error as JwtError;
-use jsonwebtoken::{Algorithm, EncodingKey, Header, encode, get_current_timestamp};
+use jsonwebtoken::{
+    Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode, get_current_timestamp,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::cache::CacheName;
@@ -51,19 +53,34 @@ impl Grant {
             caches,
         }
     }
+
+    /// Checks whether the grant allows writing to the cache.
+    pub(crate) fn allows(&self, cache: &str) -> bool {
+        self.caches.iter().any(|allowed| allowed.as_ref() == cache)
+    }
 }
 
-/// The secret that signs granary tokens.
+/// The secret that signs and verifies granary tokens.
 #[derive(Clone)]
 pub(crate) struct TokenKey {
     /// The key that signs tokens.
     encoding: EncodingKey,
+    /// The key that verifies tokens.
+    decoding: DecodingKey,
 }
 
 impl TokenKey {
     /// Signs a grant.
     pub(crate) fn sign(&self, grant: &Grant) -> Result<String, JwtError> {
         encode(&Header::new(Algorithm::HS256), grant, &self.encoding)
+    }
+
+    /// Verifies a token and returns its grant.
+    pub(crate) fn verify(&self, token: &str) -> Result<Grant, JwtError> {
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.set_issuer(&[ISSUER]);
+        validation.set_required_spec_claims(&["exp", "iss"]);
+        decode(token, &self.decoding, &validation).map(|data| data.claims)
     }
 }
 
@@ -82,6 +99,7 @@ impl FromStr for TokenKey {
         }
         Ok(Self {
             encoding: EncodingKey::from_secret(secret.as_bytes()),
+            decoding: DecodingKey::from_secret(secret.as_bytes()),
         })
     }
 }
@@ -93,8 +111,6 @@ pub(crate) struct ShortSecret;
 
 #[cfg(test)]
 mod tests {
-    use jsonwebtoken::dangerous::insecure_decode_claims;
-
     use super::*;
 
     fn key(secret: &str) -> TokenKey {
@@ -102,7 +118,7 @@ mod tests {
     }
 
     #[test]
-    fn signed_tokens_carry_the_grant() {
+    fn round_trip() {
         let key = key("0123456789abcdef0123456789abcdef");
         let cache = CacheName::try_from("sstate-pr".to_owned()).unwrap();
         let grant = Grant::new(
@@ -111,8 +127,32 @@ mod tests {
             vec![cache],
             Duration::from_hours(1),
         );
-        let signed: Grant = insecure_decode_claims(key.sign(&grant).unwrap()).unwrap();
-        assert_eq!(signed, grant, "the grant survives signing");
+        let verified = key.verify(&key.sign(&grant).unwrap()).unwrap();
+        assert_eq!(verified, grant, "the grant survives signing");
+        assert!(verified.allows("sstate-pr"), "the listed cache is allowed");
+        assert!(!verified.allows("sstate-main"), "other caches are not");
+    }
+
+    #[test]
+    fn rejects_other_keys_and_expired_tokens() {
+        let key_a = key("0123456789abcdef0123456789abcdef");
+        let key_b = key("fedcba9876543210fedcba9876543210");
+        let grant = Grant::new(
+            "sub".to_owned(),
+            "pr".to_owned(),
+            Vec::new(),
+            Duration::from_hours(1),
+        );
+        assert!(
+            key_b.verify(&key_a.sign(&grant).unwrap()).is_err(),
+            "another key's token is rejected"
+        );
+        let mut expired = grant;
+        expired.exp = 1;
+        assert!(
+            key_a.verify(&key_a.sign(&expired).unwrap()).is_err(),
+            "an expired token is rejected"
+        );
     }
 
     #[test]

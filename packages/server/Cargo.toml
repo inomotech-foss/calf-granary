@@ -12,8 +12,10 @@ version.workspace = true
 
 [dependencies]
 axum = { workspace = true, features = ["http1", "json", "tokio"] }
+bytes = { workspace = true }
 calf-granary-server-db = { workspace = true, features = ["deadpool"] }
 deadpool-postgres = { workspace = true, features = ["rt_tokio_1"] }
+futures = { workspace = true }
 jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
 object_store = { workspace = true, features = ["aws"] }
 reqwest = { workspace = true, features = ["json", "rustls"] }

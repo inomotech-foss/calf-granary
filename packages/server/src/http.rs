@@ -14,17 +14,19 @@ use deadpool_postgres::Pool;
 use crate::access::AccessLog;
 use crate::cache::Caches;
 use crate::exchange::Exchange;
+use crate::token::TokenKey;
 
 /// Builds the router for all routes.
 pub(crate) fn router(
     pool: Pool,
     caches: Arc<Caches>,
     access: Arc<AccessLog>,
+    key: TokenKey,
     exchange: Arc<Exchange>,
 ) -> Router {
     Router::new()
         .merge(health::router(pool))
-        .merge(objects::router(caches, access))
+        .merge(objects::router(caches, access, key))
         .merge(token::router(exchange))
 }
 

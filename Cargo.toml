@@ -16,6 +16,7 @@ calf-granary-server-db = { path = "packages/server-db", default-features = false
 
 aws-lc-rs = { version = "1.18.2", default-features = false }
 axum = { version = "0.8.9", default-features = false }
+bytes = { version = "1.12.1", default-features = false }
 chrono = { version = "0.4.45", default-features = false }
 clap = { version = "4.6.7", default-features = false }
 deadpool-postgres = { version = "0.14.2", default-features = false }

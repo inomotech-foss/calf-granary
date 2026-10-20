@@ -151,8 +151,12 @@ mod tests {
         }));
         let issued = exchange.exchange(&id_token).await.unwrap();
         assert_eq!(issued.tier, "pr", "the pr tier matches");
-        let grant: Grant = insecure_decode_claims(&issued.token).unwrap();
-        assert_eq!(grant.caches, issued.caches, "the token writes sstate-pr");
+        let grant = exchange.key.verify(&issued.token).unwrap();
+        assert!(grant.allows("sstate-pr"), "the token writes sstate-pr");
+        assert!(
+            !grant.allows("sstate-main"),
+            "the token can't write sstate-main"
+        );
     }
 
     #[tokio::test]
