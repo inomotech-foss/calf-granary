@@ -1,0 +1,14 @@
+[package]
+name = "calf-granary-server"
+description = "Build cache server for CI runners"
+categories = ["development-tools::build-utils"]
+keywords = ["cache", "ci", "nix", "yocto"]
+readme.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true

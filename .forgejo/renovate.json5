@@ -3,7 +3,7 @@
   configMigration: true,
   dependencyDashboard: true,
   dependencyDashboardApproval: true,
-  enabledManagers: ["github-actions", "nix"],
+  enabledManagers: ["github-actions", "nix", "cargo"],
   lockFileMaintenance: {
     enabled: true,
     schedule: ["before 4am on monday"],

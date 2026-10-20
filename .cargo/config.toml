@@ -1,0 +1,4 @@
+[registries]
+
+[registries.codeberg-inomotech]
+index = "sparse+https://codeberg.org/api/packages/inomotech/cargo/"

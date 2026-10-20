@@ -9,5 +9,6 @@
     };
     repository.forge = "forgejo";
     commitMessage.format = "conventional";
+    rust.enable = true;
   };
 }
