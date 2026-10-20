@@ -1,0 +1,81 @@
+name: Pull request
+on:
+  pull_request: {}
+concurrency:
+  cancel-in-progress: true
+  group: pull_request-${{ forge.ref }}
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  comment-end:
+    name: Report PR review results
+    runs-on: calf-normal
+    needs:
+      - comment-start
+      - quality
+    if: ${{ always() && !cancelled() && forge.event_name == 'pull_request' }}
+    steps:
+      - name: Update pull request comment
+        uses: https://codeberg.org/inomotech/actions-comment-pull-request@e007c4a9d16daf06989ab390ba8c2d45632acb01
+        with:
+          GITHUB_TOKEN: ${{ secrets.NOMOBOT_ISSUE_WRITE_TOKEN }}
+          comment_tag: pr-review
+          create_if_not_exists: false
+          message: |-
+            # Review
+
+            Completed for commit ${{ forge.sha }}.
+
+            ${{ needs.quality.outputs.summary }}
+  comment-start:
+    name: Report PR review start
+    runs-on: calf-normal
+    if: ${{ !cancelled() && forge.event_name == 'pull_request' }}
+    steps:
+      - name: Update pull request comment
+        uses: https://codeberg.org/inomotech/actions-comment-pull-request@e007c4a9d16daf06989ab390ba8c2d45632acb01
+        with:
+          GITHUB_TOKEN: ${{ secrets.NOMOBOT_ISSUE_WRITE_TOKEN }}
+          comment_tag: pr-review
+          create_if_not_exists: false
+          message: |-
+            # Review
+
+            Running for commit ${{ forge.sha }}.
+  gate:
+    name: Gate
+    runs-on: calf-normal
+    needs:
+      - quality
+    if: ${{ always() }}
+    steps:
+      - name: Require upstream jobs
+        run: test '${{ needs.quality.result }}' = success
+  quality:
+    name: Repository checks
+    runs-on: calf-normal
+    outputs:
+      summary: ${{ steps.summary.outputs.markdown }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Nix
+        uses: https://github.com/cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
+        with:
+          install_options: '--yes'
+      - name: Run flake checks
+        run: nix flake check
+      - id: checks
+        name: Run enabled applicable checks
+        run: nix run .#ephemeris-check -- run-applicable --context checkout
+      - id: summary
+        name: Build summary
+        if: ${{ always() }}
+        run: |-
+          echo 'markdown<<EOF' >> "$FORGEJO_OUTPUT"
+          echo '## Repository checks' >> "$FORGEJO_OUTPUT"
+          echo "- Enabled applicable checks: ${{ steps.checks.outcome }}" >> "$FORGEJO_OUTPUT"
+          echo EOF >> "$FORGEJO_OUTPUT"

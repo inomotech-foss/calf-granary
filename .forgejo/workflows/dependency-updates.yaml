@@ -1,0 +1,49 @@
+name: Dependency updates
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: 2 3 * * *
+  workflow_dispatch: {}
+concurrency:
+  cancel-in-progress: true
+  group: renovate
+jobs:
+  renovate:
+    name: Renovate
+    runs-on: calf-normal
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install Nix
+        uses: https://github.com/cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
+        with:
+          install_options: '--yes'
+      - name: Restore Renovate cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          key: renovate
+          path: .renovate-cache/
+      - name: Run Renovate
+        run: nix run .#ephemeris-renovate
+        env:
+          LOG_LEVEL: debug
+          RENOVATE_ALLOWED_COMMANDS: '["^nix run \\.#ephemeris -- files apply$"]'
+          RENOVATE_CACHE_DIR: .renovate-cache/
+          RENOVATE_CONFIG: '{"allowCustomCrateRegistries":true,"configFileNames":[".forgejo/renovate.json5"],"onboarding":false}'
+          RENOVATE_ENDPOINT: ${{ forge.api_url }}
+          RENOVATE_GITHUB_COM_TOKEN: ${{ secrets.RENOVATE_GITHUB_COM_TOKEN }}
+          RENOVATE_GIT_AUTHOR: ${{ vars.NOMOBOT_GIT_NAME }} <${{ vars.NOMOBOT_GIT_EMAIL }}>
+          RENOVATE_PLATFORM: forgejo
+          RENOVATE_REPOSITORIES: ${{ forge.repository }}
+          RENOVATE_REPOSITORY_CACHE: enabled
+          RENOVATE_REPOSITORY_CACHE_TYPE: local
+          RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
+      - name: Save Renovate cache
+        if: ${{ !cancelled() }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          key: renovate
+          path: .renovate-cache/
