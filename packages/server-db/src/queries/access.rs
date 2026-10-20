@@ -7,7 +7,6 @@ pub struct RecordAccessesParams<
     T3: crate::ArraySql<Item = T2>,
 > {
     pub bucket: T1,
-    pub accessed_at: chrono::DateTime<chrono::FixedOffset>,
     pub keys: T3,
 }
 #[derive(Debug)]
@@ -114,8 +113,8 @@ where
 pub struct RecordAccessesStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn record_accesses() -> RecordAccessesStmt {
     RecordAccessesStmt(
-        "INSERT INTO access (bucket, key, last_access) SELECT $1::text, key, $2::timestamptz FROM \
-         unnest($3::text[]) AS key ON CONFLICT (bucket, key) DO UPDATE SET last_access = \
+        "INSERT INTO access (bucket, key, last_access) SELECT $1::text, key, now() FROM \
+         unnest($2::text[]) AS key ON CONFLICT (bucket, key) DO UPDATE SET last_access = \
          greatest(access.last_access, excluded.last_access)",
         None,
     )
@@ -140,10 +139,9 @@ impl RecordAccessesStmt {
         &'s self,
         client: &'c C,
         bucket: &'a T1,
-        accessed_at: &'a chrono::DateTime<chrono::FixedOffset>,
         keys: &'a T3,
     ) -> Result<u64, tokio_postgres::Error> {
-        client.execute(self.0, &[bucket, accessed_at, keys]).await
+        client.execute(self.0, &[bucket, keys]).await
     }
 }
 impl<
@@ -171,7 +169,7 @@ impl<
     ) -> std::pin::Pin<
         Box<dyn futures::Future<Output = Result<u64, tokio_postgres::Error>> + Send + 'a>,
     > {
-        Box::pin(self.bind(client, &params.bucket, &params.accessed_at, &params.keys))
+        Box::pin(self.bind(client, &params.bucket, &params.keys))
     }
 }
 pub struct LastAccessesStmt(&'static str, Option<tokio_postgres::Statement>);

@@ -1,6 +1,6 @@
 --! record_accesses
 INSERT INTO access (bucket, key, last_access)
-SELECT :bucket::text, key, :accessed_at::timestamptz
+SELECT :bucket::text, key, now()
 FROM unnest(:keys::text[]) AS key
 ON CONFLICT (bucket, key) DO UPDATE
 SET last_access = greatest(access.last_access, excluded.last_access);
