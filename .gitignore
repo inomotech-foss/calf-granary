@@ -3,4 +3,5 @@
 /.direnv
 /result
 /target
+/node_modules
 /.dev

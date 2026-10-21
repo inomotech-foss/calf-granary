@@ -1,0 +1,31 @@
+name: calf-granary
+description: Sets up granary build caches for Nix and Yocto builds
+inputs:
+  server:
+    description: The granary server, such as https://granary.example.org
+    required: true
+  audience:
+    description: The audience that granary expects in ID tokens
+    default: calf-granary
+  nix:
+    description: Whether to substitute from and push to the Nix cache
+    default: "true"
+  bitbake-conf:
+    description: A BitBake configuration file to append the cache settings to, such as build/conf/auto.conf
+    default: ""
+  sstate-dir:
+    description: The SSTATE_DIR to upload new sstate files from after the job
+    default: ""
+  downloads-dir:
+    description: The DL_DIR to upload new downloads from after the job
+    default: ""
+  client:
+    description: The calf-granary-client program that uploads
+    default: calf-granary-client
+outputs:
+  tier:
+    description: The tier that the job's ID token mapped to
+runs:
+  using: node24
+  main: action/main.ts
+  post: action/post.ts
