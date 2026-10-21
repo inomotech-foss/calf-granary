@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use calf_granary_server_db::queries::content::{
-    entry_exists, expire_entries, find_entry, insert_entry,
+    entry_exists, expire_entries, find_entry, insert_entry, missing_entries,
 };
 use chrono::{DateTime, FixedOffset, TimeDelta, Utc};
 use deadpool_postgres::{Client, Pool, PoolError};
@@ -240,6 +240,28 @@ impl Cache {
     /// The protocol that clients speak.
     pub(crate) const fn protocol(&self) -> &Protocol {
         &self.protocol
+    }
+
+    /// This cache and its fallback, in lookup order.
+    fn lookup_chain(&self) -> impl Iterator<Item = &Self> {
+        [Some(self), self.fallback.as_deref()].into_iter().flatten()
+    }
+
+    /// Returns the keys that neither this cache nor its fallback has.
+    pub(crate) async fn missing(
+        &self,
+        client: &Client,
+        keys: &[ObjectKey],
+    ) -> Result<Vec<String>, tokio_postgres::Error> {
+        let keys: Vec<&str> = keys.iter().map(AsRef::as_ref).collect();
+        let caches: Vec<&str> = self
+            .lookup_chain()
+            .map(|cache| cache.name.as_ref())
+            .collect();
+        missing_entries()
+            .bind(client, &keys.as_slice(), &caches.as_slice())
+            .all()
+            .await
     }
 
     /// The store that new chunks go to.

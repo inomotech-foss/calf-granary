@@ -7,14 +7,15 @@ mod nix;
 use core::error::Error;
 use std::sync::Arc;
 
-use axum::Router;
 use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE, ETAG, LAST_MODIFIED};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse as _, Response};
 use axum::routing::{get, post, put};
+use axum::{Json, Router};
 use deadpool_postgres::{Client, Pool};
+use serde::{Deserialize, Serialize};
 
 use self::metrics::{Lookup, ObjectMetrics, Upload};
 use super::credential;
@@ -23,6 +24,9 @@ use crate::cache::{Caches, Hit, ObjectKey, Protocol, PutError, Stored};
 use crate::content::{Content, Encoding, WriteError};
 use crate::hex;
 use crate::token::{Grant, TokenKey};
+
+/// The most keys one missing-keys request may ask about.
+const MAX_KEYS: usize = 10_000;
 
 /// Shared state of the object routes.
 #[derive(Clone, Debug)]
@@ -39,6 +43,21 @@ struct Objects {
     key: TokenKey,
     /// Records reads and writes.
     metrics: ObjectMetrics,
+}
+
+/// A question about which keys a cache lacks.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MissingRequest {
+    /// The keys.
+    keys: Vec<String>,
+}
+
+/// The keys that a cache lacks.
+#[derive(Debug, Serialize)]
+struct MissingResponse {
+    /// The keys that neither the cache nor its fallback has.
+    missing: Vec<String>,
 }
 
 impl Objects {
@@ -122,6 +141,7 @@ pub(super) fn router(
         .route("/_api/nix/{cache}/missing", post(nix::missing))
         .route("/_api/nix/{cache}/public-key", get(nix::public_key))
         .route("/_hashserv/{cache}", get(hashserv::connect))
+        .route("/_api/files/{cache}/missing", post(missing))
         .layer(DefaultBodyLimit::disable())
         .with_state(Objects {
             caches,
@@ -242,6 +262,42 @@ async fn put_object(
                 "failed to store an object"
             );
             StatusCode::BAD_GATEWAY
+        }
+    }
+}
+
+/// Answers which keys neither a files cache nor its fallback has.
+async fn missing(
+    State(state): State<Objects>,
+    Path(cache): Path<String>,
+    Json(request): Json<MissingRequest>,
+) -> Response {
+    let Some(found) = state.caches.get(&cache) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !matches!(found.protocol(), Protocol::Files) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if request.keys.len() > MAX_KEYS {
+        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    }
+    let Ok(keys) = request
+        .keys
+        .iter()
+        .map(|key| ObjectKey::try_from(key.as_str()))
+        .collect::<Result<Vec<_>, _>>()
+    else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let client = match state.client().await {
+        Ok(client) => client,
+        Err(status) => return status.into_response(),
+    };
+    match found.missing(&client, &keys).await {
+        Ok(missing) => Json(MissingResponse { missing }).into_response(),
+        Err(err) => {
+            tracing::error!(error = &err as &dyn Error, "failed to look up missing keys");
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
         }
     }
 }

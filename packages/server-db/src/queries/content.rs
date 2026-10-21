@@ -68,6 +68,16 @@ pub struct KnownObjectsParams<
     pub store: T1,
     pub keys: T3,
 }
+#[derive(Debug)]
+pub struct MissingEntriesParams<
+    T1: crate::StringSql,
+    T2: crate::ArraySql<Item = T1>,
+    T3: crate::StringSql,
+    T4: crate::ArraySql<Item = T3>,
+> {
+    pub keys: T2,
+    pub caches: T4,
+}
 #[derive(Debug, Clone, PartialEq)]
 pub struct InsertChunk {
     pub id: i64,
@@ -1598,5 +1608,73 @@ impl ZstdSizeStmt {
             extractor: |row| Ok(row.try_get(0)?),
             mapper: |it| it,
         }
+    }
+}
+pub struct MissingEntriesStmt(&'static str, Option<tokio_postgres::Statement>);
+pub fn missing_entries() -> MissingEntriesStmt {
+    MissingEntriesStmt(
+        "SELECT key FROM unnest($1::text[]) AS requested (key) WHERE NOT EXISTS ( SELECT FROM \
+         entry WHERE entry.key = requested.key AND entry.cache = any($2::text[]) )",
+        None,
+    )
+}
+impl MissingEntriesStmt {
+    pub async fn prepare<'a, C: GenericClient>(
+        mut self,
+        client: &'a C,
+    ) -> Result<Self, tokio_postgres::Error> {
+        self.1 = Some(client.prepare(self.0).await?);
+        Ok(self)
+    }
+    pub fn bind<
+        'c,
+        'a,
+        's,
+        C: GenericClient,
+        T1: crate::StringSql,
+        T2: crate::ArraySql<Item = T1>,
+        T3: crate::StringSql,
+        T4: crate::ArraySql<Item = T3>,
+    >(
+        &'s self,
+        client: &'c C,
+        keys: &'a T2,
+        caches: &'a T4,
+    ) -> StringQuery<'c, 'a, 's, C, String, 2> {
+        StringQuery {
+            client,
+            params: [keys, caches],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |row| Ok(row.try_get(0)?),
+            mapper: |it| it.into(),
+        }
+    }
+}
+impl<
+    'c,
+    'a,
+    's,
+    C: GenericClient,
+    T1: crate::StringSql,
+    T2: crate::ArraySql<Item = T1>,
+    T3: crate::StringSql,
+    T4: crate::ArraySql<Item = T3>,
+>
+    crate::client::async_::Params<
+        'c,
+        'a,
+        's,
+        MissingEntriesParams<T1, T2, T3, T4>,
+        StringQuery<'c, 'a, 's, C, String, 2>,
+        C,
+    > for MissingEntriesStmt
+{
+    fn params(
+        &'s self,
+        client: &'c C,
+        params: &'a MissingEntriesParams<T1, T2, T3, T4>,
+    ) -> StringQuery<'c, 'a, 's, C, String, 2> {
+        self.bind(client, &params.keys, &params.caches)
     }
 }

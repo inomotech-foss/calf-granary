@@ -285,3 +285,36 @@ async fn chunks_content_for_deduplication() {
         .get(0);
     assert_eq!(blobs, 2, "the whole copy reuses the chunked blob");
 }
+
+#[tokio::test]
+#[ignore = "needs Postgres and object storage"]
+async fn answers_missing_keys() {
+    let stack = Stack::new(CACHES).await;
+    stack.migrate().await;
+    let server = stack.serve().await;
+    let token = stack.token(&["main"]).await;
+    put(&server, Some(&token), "main/a/b", b"a".to_vec()).await;
+    let missing = async |cache: &str, keys: &[&str]| -> serde_json::Value {
+        server
+            .http()
+            .post(server.url(&format!("_api/files/{cache}/missing")))
+            .json(&serde_json::json!({ "keys": keys }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
+    };
+    assert_eq!(
+        missing("main", &["a/b", "c"]).await,
+        serde_json::json!({ "missing": ["c"] }),
+        "only the unknown key is missing"
+    );
+    assert_eq!(
+        missing("pr", &["a/b", "c"]).await,
+        serde_json::json!({ "missing": ["c"] }),
+        "the fallback counts"
+    );
+    assert!(server.stop().await.success(), "serve stops cleanly");
+}

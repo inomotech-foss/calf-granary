@@ -36,11 +36,6 @@ pub(crate) struct Report {
 }
 
 impl Cache {
-    /// This cache and its fallback, in lookup order.
-    fn lookup_chain(&self) -> impl Iterator<Item = &Self> {
-        [Some(self), self.fallback.as_deref()].into_iter().flatten()
-    }
-
     /// Looks up the unihashes of `(method, taskhash)` pairs, in order.
     pub(crate) async fn unihashes(
         &self,

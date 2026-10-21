@@ -99,3 +99,11 @@ SELECT CASE WHEN bool_and(chunk.compression = 'zstd') THEN sum(chunk.stored_size
 FROM blob_chunk
 JOIN chunk ON chunk.id = blob_chunk.chunk_id
 WHERE blob_chunk.blob_id = :blob_id::bigint;
+
+--! missing_entries
+SELECT key
+FROM unnest(:keys::text[]) AS requested (key)
+WHERE NOT EXISTS (
+    SELECT FROM entry
+    WHERE entry.key = requested.key AND entry.cache = any(:caches::text[])
+);
