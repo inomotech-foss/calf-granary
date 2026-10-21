@@ -7,7 +7,7 @@ use opentelemetry::{KeyValue, global};
 
 use super::TaskKind;
 use crate::cache::CacheName;
-use crate::content::CollectStats;
+use crate::content::{CollectStats, TierStats};
 use crate::telemetry::SCOPE;
 
 /// Upper bounds of the task duration buckets, in seconds.
@@ -26,6 +26,10 @@ pub(super) struct TaskMetrics {
     deleted_chunks: Counter<u64>,
     /// Stored bytes freed by collection.
     freed: Counter<u64>,
+    /// Chunks moved to longer-lived stores.
+    tiered_chunks: Counter<u64>,
+    /// Stored bytes moved to longer-lived stores.
+    tiered_bytes: Counter<u64>,
     /// Stored bytes per store.
     store_size: Gauge<u64>,
     /// Chunks per store.
@@ -56,6 +60,15 @@ impl TaskMetrics {
                 .with_unit("By")
                 .with_description("Stored content deleted by collection")
                 .build(),
+            tiered_chunks: meter
+                .u64_counter("granary.tier.chunks")
+                .with_description("Chunks moved to longer-lived stores")
+                .build(),
+            tiered_bytes: meter
+                .u64_counter("granary.tier.moved")
+                .with_unit("By")
+                .with_description("Stored content moved to longer-lived stores")
+                .build(),
             store_size: meter
                 .u64_gauge("granary.store.size")
                 .with_unit("By")
@@ -78,6 +91,12 @@ impl TaskMetrics {
     pub(super) fn collected(&self, stats: CollectStats) {
         self.deleted_chunks.add(stats.deleted_chunks, &[]);
         self.freed.add(stats.freed_bytes, &[]);
+    }
+
+    /// Records what tiering moved.
+    pub(super) fn tiered(&self, stats: TierStats) {
+        self.tiered_chunks.add(stats.moved_chunks, &[]);
+        self.tiered_bytes.add(stats.moved_bytes, &[]);
     }
 
     /// Records the size of a store.

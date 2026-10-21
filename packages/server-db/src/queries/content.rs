@@ -78,6 +78,33 @@ pub struct MissingEntriesParams<
     pub keys: T2,
     pub caches: T4,
 }
+#[derive(Debug)]
+pub struct MisplacedChunksParams<
+    T1: crate::StringSql,
+    T2: crate::ArraySql<Item = T1>,
+    T3: crate::StringSql,
+    T4: crate::ArraySql<Item = T3>,
+    T5: crate::ArraySql<Item = f64>,
+> {
+    pub caches: T2,
+    pub stores: T4,
+    pub retentions: T5,
+    pub after: i64,
+    pub until: i64,
+}
+#[derive(Debug)]
+pub struct MoveChunkParams<
+    T1: crate::StringSql,
+    T2: crate::StringSql,
+    T3: crate::StringSql,
+    T4: crate::StringSql,
+> {
+    pub target: T1,
+    pub new_key: T2,
+    pub id: i64,
+    pub store: T3,
+    pub old_key: T4,
+}
 #[derive(Debug, Clone, PartialEq)]
 pub struct InsertChunk {
     pub id: i64,
@@ -213,6 +240,40 @@ impl<'a> From<StoreSizesBorrowed<'a>> for StoreSizes {
             store: store.into(),
             chunks,
             stored_bytes,
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct MisplacedChunks {
+    pub id: i64,
+    pub store: String,
+    pub object_key: String,
+    pub stored_size: i64,
+    pub target: String,
+}
+pub struct MisplacedChunksBorrowed<'a> {
+    pub id: i64,
+    pub store: &'a str,
+    pub object_key: &'a str,
+    pub stored_size: i64,
+    pub target: &'a str,
+}
+impl<'a> From<MisplacedChunksBorrowed<'a>> for MisplacedChunks {
+    fn from(
+        MisplacedChunksBorrowed {
+            id,
+            store,
+            object_key,
+            stored_size,
+            target,
+        }: MisplacedChunksBorrowed<'a>,
+    ) -> Self {
+        Self {
+            id,
+            store: store.into(),
+            object_key: object_key.into(),
+            stored_size,
+            target: target.into(),
         }
     }
 }
@@ -890,6 +951,73 @@ where
         mapper: fn(StoreSizesBorrowed) -> R,
     ) -> StoreSizesQuery<'c, 'a, 's, C, R, N> {
         StoreSizesQuery {
+            client: self.client,
+            params: self.params,
+            query: self.query,
+            cached: self.cached,
+            extractor: self.extractor,
+            mapper,
+        }
+    }
+    pub async fn one(self) -> Result<T, tokio_postgres::Error> {
+        let row =
+            crate::client::async_::one(self.client, self.query, &self.params, self.cached).await?;
+        Ok((self.mapper)((self.extractor)(&row)?))
+    }
+    pub async fn all(self) -> Result<Vec<T>, tokio_postgres::Error> {
+        self.iter().await?.try_collect().await
+    }
+    pub async fn opt(self) -> Result<Option<T>, tokio_postgres::Error> {
+        let opt_row =
+            crate::client::async_::opt(self.client, self.query, &self.params, self.cached).await?;
+        Ok(opt_row
+            .map(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+            .transpose()?)
+    }
+    pub async fn iter(
+        self,
+    ) -> Result<
+        impl futures::Stream<Item = Result<T, tokio_postgres::Error>> + 'c,
+        tokio_postgres::Error,
+    > {
+        let stream = crate::client::async_::raw(
+            self.client,
+            self.query,
+            crate::slice_iter(&self.params),
+            self.cached,
+        )
+        .await?;
+        let mapped = stream
+            .map(move |res| {
+                res.and_then(|row| {
+                    let extracted = (self.extractor)(&row)?;
+                    Ok((self.mapper)(extracted))
+                })
+            })
+            .into_stream();
+        Ok(mapped)
+    }
+}
+pub struct MisplacedChunksQuery<'c, 'a, 's, C: GenericClient, T, const N: usize> {
+    client: &'c C,
+    params: [&'a (dyn postgres_types::ToSql + Sync); N],
+    query: &'static str,
+    cached: Option<&'s tokio_postgres::Statement>,
+    extractor: fn(&tokio_postgres::Row) -> Result<MisplacedChunksBorrowed, tokio_postgres::Error>,
+    mapper: fn(MisplacedChunksBorrowed) -> T,
+}
+impl<'c, 'a, 's, C, T: 'c, const N: usize> MisplacedChunksQuery<'c, 'a, 's, C, T, N>
+where
+    C: GenericClient,
+{
+    pub fn map<R>(
+        self,
+        mapper: fn(MisplacedChunksBorrowed) -> R,
+    ) -> MisplacedChunksQuery<'c, 'a, 's, C, R, N> {
+        MisplacedChunksQuery {
             client: self.client,
             params: self.params,
             query: self.query,
@@ -1806,5 +1934,203 @@ impl StoreSizesStmt {
                 },
             mapper: |it| StoreSizes::from(it),
         }
+    }
+}
+pub struct MaxChunkIdStmt(&'static str, Option<tokio_postgres::Statement>);
+pub fn max_chunk_id() -> MaxChunkIdStmt {
+    MaxChunkIdStmt("SELECT max(id) AS id FROM chunk", None)
+}
+impl MaxChunkIdStmt {
+    pub async fn prepare<'a, C: GenericClient>(
+        mut self,
+        client: &'a C,
+    ) -> Result<Self, tokio_postgres::Error> {
+        self.1 = Some(client.prepare(self.0).await?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient>(
+        &'s self,
+        client: &'c C,
+    ) -> Optioni64Query<'c, 'a, 's, C, Option<i64>, 0> {
+        Optioni64Query {
+            client,
+            params: [],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |row| Ok(row.try_get(0)?),
+            mapper: |it| it,
+        }
+    }
+}
+pub struct MisplacedChunksStmt(&'static str, Option<tokio_postgres::Statement>);
+pub fn misplaced_chunks() -> MisplacedChunksStmt {
+    MisplacedChunksStmt(
+        "WITH placement (cache, store, retention) AS ( SELECT * FROM unnest($1::text[], \
+         $2::text[], $3::float8[]) ), wanted AS ( SELECT blob_chunk.chunk_id, \
+         (array_agg(placement.store ORDER BY placement.retention DESC, placement.store))[1] AS \
+         store FROM blob_chunk JOIN entry ON entry.blob_id = blob_chunk.blob_id JOIN placement ON \
+         placement.cache = entry.cache WHERE blob_chunk.chunk_id > $4::bigint AND \
+         blob_chunk.chunk_id <= $5::bigint GROUP BY blob_chunk.chunk_id ) SELECT chunk.id, \
+         chunk.store, chunk.object_key, chunk.stored_size, wanted.store AS target FROM chunk JOIN \
+         wanted ON wanted.chunk_id = chunk.id WHERE chunk.state = 'valid' AND chunk.store != \
+         wanted.store ORDER BY chunk.id",
+        None,
+    )
+}
+impl MisplacedChunksStmt {
+    pub async fn prepare<'a, C: GenericClient>(
+        mut self,
+        client: &'a C,
+    ) -> Result<Self, tokio_postgres::Error> {
+        self.1 = Some(client.prepare(self.0).await?);
+        Ok(self)
+    }
+    pub fn bind<
+        'c,
+        'a,
+        's,
+        C: GenericClient,
+        T1: crate::StringSql,
+        T2: crate::ArraySql<Item = T1>,
+        T3: crate::StringSql,
+        T4: crate::ArraySql<Item = T3>,
+        T5: crate::ArraySql<Item = f64>,
+    >(
+        &'s self,
+        client: &'c C,
+        caches: &'a T2,
+        stores: &'a T4,
+        retentions: &'a T5,
+        after: &'a i64,
+        until: &'a i64,
+    ) -> MisplacedChunksQuery<'c, 'a, 's, C, MisplacedChunks, 5> {
+        MisplacedChunksQuery {
+            client,
+            params: [caches, stores, retentions, after, until],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |
+                row: &tokio_postgres::Row,
+            | -> Result<MisplacedChunksBorrowed, tokio_postgres::Error> {
+                Ok(MisplacedChunksBorrowed {
+                    id: row.try_get(0)?,
+                    store: row.try_get(1)?,
+                    object_key: row.try_get(2)?,
+                    stored_size: row.try_get(3)?,
+                    target: row.try_get(4)?,
+                })
+            },
+            mapper: |it| MisplacedChunks::from(it),
+        }
+    }
+}
+impl<
+    'c,
+    'a,
+    's,
+    C: GenericClient,
+    T1: crate::StringSql,
+    T2: crate::ArraySql<Item = T1>,
+    T3: crate::StringSql,
+    T4: crate::ArraySql<Item = T3>,
+    T5: crate::ArraySql<Item = f64>,
+>
+    crate::client::async_::Params<
+        'c,
+        'a,
+        's,
+        MisplacedChunksParams<T1, T2, T3, T4, T5>,
+        MisplacedChunksQuery<'c, 'a, 's, C, MisplacedChunks, 5>,
+        C,
+    > for MisplacedChunksStmt
+{
+    fn params(
+        &'s self,
+        client: &'c C,
+        params: &'a MisplacedChunksParams<T1, T2, T3, T4, T5>,
+    ) -> MisplacedChunksQuery<'c, 'a, 's, C, MisplacedChunks, 5> {
+        self.bind(
+            client,
+            &params.caches,
+            &params.stores,
+            &params.retentions,
+            &params.after,
+            &params.until,
+        )
+    }
+}
+pub struct MoveChunkStmt(&'static str, Option<tokio_postgres::Statement>);
+pub fn move_chunk() -> MoveChunkStmt {
+    MoveChunkStmt(
+        "UPDATE chunk SET store = $1::text, object_key = $2::text WHERE id = $3::bigint AND state \
+         = 'valid' AND store = $4::text AND object_key = $5::text",
+        None,
+    )
+}
+impl MoveChunkStmt {
+    pub async fn prepare<'a, C: GenericClient>(
+        mut self,
+        client: &'a C,
+    ) -> Result<Self, tokio_postgres::Error> {
+        self.1 = Some(client.prepare(self.0).await?);
+        Ok(self)
+    }
+    pub async fn bind<
+        'c,
+        'a,
+        's,
+        C: GenericClient,
+        T1: crate::StringSql,
+        T2: crate::StringSql,
+        T3: crate::StringSql,
+        T4: crate::StringSql,
+    >(
+        &'s self,
+        client: &'c C,
+        target: &'a T1,
+        new_key: &'a T2,
+        id: &'a i64,
+        store: &'a T3,
+        old_key: &'a T4,
+    ) -> Result<u64, tokio_postgres::Error> {
+        client
+            .execute(self.0, &[target, new_key, id, store, old_key])
+            .await
+    }
+}
+impl<
+    'a,
+    C: GenericClient + Send + Sync,
+    T1: crate::StringSql,
+    T2: crate::StringSql,
+    T3: crate::StringSql,
+    T4: crate::StringSql,
+>
+    crate::client::async_::Params<
+        'a,
+        'a,
+        'a,
+        MoveChunkParams<T1, T2, T3, T4>,
+        std::pin::Pin<
+            Box<dyn futures::Future<Output = Result<u64, tokio_postgres::Error>> + Send + 'a>,
+        >,
+        C,
+    > for MoveChunkStmt
+{
+    fn params(
+        &'a self,
+        client: &'a C,
+        params: &'a MoveChunkParams<T1, T2, T3, T4>,
+    ) -> std::pin::Pin<
+        Box<dyn futures::Future<Output = Result<u64, tokio_postgres::Error>> + Send + 'a>,
+    > {
+        Box::pin(self.bind(
+            client,
+            &params.target,
+            &params.new_key,
+            &params.id,
+            &params.store,
+            &params.old_key,
+        ))
     }
 }

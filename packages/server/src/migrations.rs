@@ -46,6 +46,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "hashserv",
         sql: include_str!("../migrations/0008_hashserv.sql"),
     },
+    Migration {
+        version: 9,
+        name: "tier",
+        sql: include_str!("../migrations/0009_tier.sql"),
+    },
 ];
 
 /// The advisory lock that serializes concurrent migration runs.

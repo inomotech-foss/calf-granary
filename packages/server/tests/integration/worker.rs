@@ -36,21 +36,26 @@ async fn runs_scheduled_and_requested_tasks() {
     let database = stack.database().await;
     let mut worker = stack.worker();
 
-    let scheduled = time::timeout(WAIT, async {
+    let scheduled: Vec<i64> = time::timeout(WAIT, async {
         loop {
-            let row = database
-                .query_opt("SELECT id FROM task WHERE requested_by = 'schedule'", &[])
+            let rows = database
+                .query(
+                    "SELECT id FROM task WHERE requested_by = 'schedule' ORDER BY kind",
+                    &[],
+                )
                 .await
                 .unwrap();
-            if let Some(row) = row {
-                return row.get(0);
+            if rows.len() == 2 {
+                return rows.iter().map(|row| row.get(0)).collect();
             }
             time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await
-    .expect("the schedule creates a task");
-    wait_done(&database, scheduled).await;
+    .expect("the prune and tier schedules create tasks");
+    for id in scheduled {
+        wait_done(&database, id).await;
+    }
 
     let requested: i64 = database
         .query_one(

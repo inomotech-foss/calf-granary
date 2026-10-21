@@ -255,6 +255,12 @@ impl Cache {
         })
     }
 
+    /// The store that the cache's chunks belong in and its retention, unless
+    /// the cache keeps no content.
+    pub(crate) fn placement(&self) -> Option<(&StoreName, Option<Duration>)> {
+        Some((self.store.as_ref()?, self.retention))
+    }
+
     /// This cache and its fallback, in lookup order.
     fn lookup_chain(&self) -> impl Iterator<Item = &Self> {
         [Some(self), self.fallback.as_deref()].into_iter().flatten()

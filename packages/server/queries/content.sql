@@ -113,3 +113,34 @@ SELECT store, count(*) AS chunks, sum(stored_size)::bigint AS stored_bytes
 FROM chunk
 WHERE state = 'valid'
 GROUP BY store;
+
+--! max_chunk_id : (id?)
+SELECT max(id) AS id FROM chunk;
+
+--! misplaced_chunks
+WITH placement (cache, store, retention) AS (
+    SELECT * FROM unnest(:caches::text[], :stores::text[], :retentions::float8[])
+),
+wanted AS (
+    SELECT
+        blob_chunk.chunk_id,
+        (array_agg(placement.store ORDER BY placement.retention DESC, placement.store))[1] AS store
+    FROM blob_chunk
+    JOIN entry ON entry.blob_id = blob_chunk.blob_id
+    JOIN placement ON placement.cache = entry.cache
+    WHERE blob_chunk.chunk_id > :after::bigint AND blob_chunk.chunk_id <= :until::bigint
+    GROUP BY blob_chunk.chunk_id
+)
+SELECT chunk.id, chunk.store, chunk.object_key, chunk.stored_size, wanted.store AS target
+FROM chunk
+JOIN wanted ON wanted.chunk_id = chunk.id
+WHERE chunk.state = 'valid' AND chunk.store != wanted.store
+ORDER BY chunk.id;
+
+--! move_chunk
+UPDATE chunk
+SET store = :target::text, object_key = :new_key::text
+WHERE id = :id::bigint
+    AND state = 'valid'
+    AND store = :store::text
+    AND object_key = :old_key::text;

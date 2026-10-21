@@ -148,3 +148,85 @@ async fn sweeps_objects_without_chunks() {
         .get(0);
     assert_eq!(swept, 1, "the sweep is recorded");
 }
+
+#[tokio::test]
+#[ignore = "needs Postgres and object storage"]
+async fn moves_chunks_to_longer_lived_stores() {
+    let stack = Stack::new(
+        r#"
+collection_grace = "1s"
+
+[stores.short]
+bucket = "$bucket"
+prefix = "$prefix/short"
+
+[stores.long]
+bucket = "$bucket"
+prefix = "$prefix/long"
+
+[caches.main]
+store = "long"
+retention = "30d"
+
+[caches.pr]
+store = "short"
+retention = "7d"
+fallback = "main"
+"#,
+    )
+    .await;
+    stack.migrate().await;
+    let server = stack.serve().await;
+    let token = stack.token(&["main", "pr"]).await;
+    for path in ["pr/shared", "main/shared"] {
+        let status = server
+            .http()
+            .put(server.url(path))
+            .header(AUTHORIZATION, format!("Bearer {token}"))
+            .body("shared content")
+            .send()
+            .await
+            .unwrap()
+            .status();
+        assert_eq!(status, StatusCode::CREATED, "{path} is stored");
+    }
+    assert!(server.stop().await.success(), "serve stops cleanly");
+
+    let database = stack.database().await;
+    let store = async || -> String {
+        database
+            .query_one("SELECT store FROM chunk WHERE state = 'valid'", &[])
+            .await
+            .unwrap()
+            .get(0)
+    };
+    assert_eq!(store().await, "short", "the first writer placed the chunk");
+    let output = stack.run(&["tier"]).await;
+    assert!(output.status.success(), "tier failed: {}", text(&output));
+    assert_eq!(store().await, "long", "the chunk moved to main's store");
+
+    let restarted = stack.serve().await;
+    for path in ["main/shared", "pr/shared"] {
+        let body = restarted
+            .http()
+            .get(restarted.url(path))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert_eq!(body, "shared content", "{path} still reads");
+    }
+    assert!(restarted.stop().await.success(), "serve stops cleanly");
+
+    time::sleep(Duration::from_secs(2)).await;
+    let pruned = stack.run(&["prune"]).await;
+    assert!(pruned.status.success(), "prune failed: {}", text(&pruned));
+    let swept: i64 = database
+        .query_one("SELECT swept_objects FROM prune_collection", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert!(swept >= 1, "the old object is swept");
+}

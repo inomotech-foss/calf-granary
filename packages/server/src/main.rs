@@ -15,7 +15,7 @@ mod mint;
 mod nix;
 mod notifications;
 mod oidc;
-mod prune;
+mod run;
 mod serve;
 mod store;
 mod tasks;
@@ -35,8 +35,9 @@ use tokio::task;
 use crate::database::{DatabaseArgs, TlsError};
 use crate::migrations::MigrationError;
 use crate::mint::{MintArgs, MintError};
-use crate::prune::{PruneArgs, PruneCommandError};
+use crate::run::{RunArgs, RunError};
 use crate::serve::{ServeArgs, ServeError};
+use crate::tasks::TaskKind;
 use crate::telemetry::Telemetry;
 use crate::worker::{WorkerArgs, WorkerError};
 
@@ -59,9 +60,11 @@ enum Command {
         database: DatabaseArgs,
     },
     /// Delete objects that weren't used within their cache's retention.
-    Prune(PruneArgs),
+    Prune(RunArgs),
     /// Serve the caches over HTTP.
     Serve(ServeArgs),
+    /// Move chunks to the store of their longest-lived cache.
+    Tier(RunArgs),
     /// Sign a write token without exchanging an ID token.
     Token(MintArgs),
     /// Run scheduled and requested background tasks.
@@ -78,6 +81,7 @@ impl Command {
             Self::Migrate { database: _ } => Some("migrate"),
             Self::Prune(_) => Some("prune"),
             Self::Serve(_) => Some("serve"),
+            Self::Tier(_) => Some("tier"),
             Self::Token(_) => None,
             Self::Worker(_) => Some("worker"),
         }
@@ -96,8 +100,9 @@ impl Command {
                 tracing::info!(count, "migrations applied");
                 Ok(())
             }
-            Self::Prune(args) => Ok(args.run().await?),
+            Self::Prune(args) => Ok(args.run(TaskKind::Prune).await?),
             Self::Serve(args) => Ok(args.run().await?),
+            Self::Tier(args) => Ok(args.run(TaskKind::Tier).await?),
             Self::Token(args) => Ok(args.run()?),
             Self::Worker(args) => Ok(args.run().await?),
         }
@@ -116,9 +121,9 @@ enum CommandError {
     /// Signing a token failed.
     #[error(transparent)]
     Mint(#[from] MintError),
-    /// Pruning failed.
+    /// Running a task failed.
     #[error(transparent)]
-    Prune(#[from] PruneCommandError),
+    Run(#[from] RunError),
     /// Serving failed.
     #[error(transparent)]
     Serve(#[from] ServeError),

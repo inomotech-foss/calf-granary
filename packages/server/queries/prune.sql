@@ -19,3 +19,11 @@ SET deleted_blobs = excluded.deleted_blobs,
     freed_bytes = excluded.freed_bytes,
     swept_objects = excluded.swept_objects,
     finished_at = now();
+
+--! record_tier_run
+INSERT INTO tier_run (task_id, moved_chunks, moved_bytes)
+VALUES (:task_id::bigint, :moved_chunks::bigint, :moved_bytes::bigint)
+ON CONFLICT (task_id) DO UPDATE
+SET moved_chunks = excluded.moved_chunks,
+    moved_bytes = excluded.moved_bytes,
+    finished_at = now();

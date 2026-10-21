@@ -8,6 +8,7 @@
 mod chunker;
 mod collect;
 mod read;
+mod tier;
 mod upload;
 mod write;
 
@@ -19,6 +20,7 @@ use object_store::path::Path;
 
 pub(crate) use self::collect::{CollectError, CollectStats};
 pub(crate) use self::read::Encoding;
+pub(crate) use self::tier::{Placement, TierError, TierStats};
 pub(crate) use self::write::WriteError;
 use crate::hex;
 use crate::store::{StoreName, Stores};

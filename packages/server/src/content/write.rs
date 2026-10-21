@@ -283,7 +283,7 @@ async fn store_chunk(
 ///
 /// Objects that fit in one part are uploaded in one request, larger ones in
 /// parts. An unfinished multipart upload is aborted.
-async fn upload<S, E>(
+pub(super) async fn upload<S, E>(
     objects: &dyn ObjectStore,
     key: &Path,
     mut body: S,
@@ -345,7 +345,7 @@ where
 /// Deletes an object that no chunk references, logging failures.
 ///
 /// Objects that remain are swept by garbage collection.
-async fn discard(objects: &dyn ObjectStore, key: &Path) {
+pub(super) async fn discard(objects: &dyn ObjectStore, key: &Path) {
     if let Err(err) = objects.delete(key).await {
         tracing::warn!(
             error = &err as &dyn Error,

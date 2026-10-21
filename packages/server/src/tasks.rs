@@ -10,20 +10,24 @@ use std::time::Instant;
 use std::{env, process};
 
 use calf_granary_server_db::queries::content::{StoreSizes, store_sizes};
-use calf_granary_server_db::queries::prune::{record_prune_collection, record_prune_expiry};
+use calf_granary_server_db::queries::prune::{
+    record_prune_collection, record_prune_expiry, record_tier_run,
+};
 use chrono::Utc;
 use deadpool_postgres::{Client, Pool, PoolError};
 use tracing::Instrument as _;
 
 use self::metrics::TaskMetrics;
 use crate::cache::{CacheName, Caches, ExpireError};
-use crate::content::{CollectError, CollectStats, Content};
+use crate::content::{CollectError, CollectStats, Content, Placement, TierError};
 
 /// A kind of task.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TaskKind {
     /// Delete objects that weren't used within their cache's retention.
     Prune,
+    /// Move chunks to the store of their longest-lived cache.
+    Tier,
 }
 
 impl TaskKind {
@@ -31,6 +35,7 @@ impl TaskKind {
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Prune => "prune",
+            Self::Tier => "tier",
         }
     }
 }
@@ -41,6 +46,7 @@ impl FromStr for TaskKind {
     fn from_str(name: &str) -> Result<Self, Self::Err> {
         match name {
             "prune" => Ok(Self::Prune),
+            "tier" => Ok(Self::Tier),
             _ => Err(UnknownTaskKind),
         }
     }
@@ -99,6 +105,7 @@ impl Runner {
         let start = Instant::now();
         let result = match kind {
             TaskKind::Prune => self.prune(id).instrument(span).await,
+            TaskKind::Tier => self.tier(id).instrument(span).await,
         };
         self.metrics.finished(kind, result.is_ok(), start.elapsed());
         result
@@ -156,6 +163,41 @@ impl Runner {
         self.record_store_sizes(&client).await
     }
 
+    /// Moves chunks to the store of their longest-lived cache and records
+    /// what moved.
+    async fn tier(&self, id: i64) -> Result<(), TaskError> {
+        let placements: Vec<Placement> = self
+            .caches
+            .iter()
+            .filter_map(|(name, cache)| {
+                let (store, retention) = cache.placement()?;
+                Some(Placement {
+                    cache: name.to_string(),
+                    store: store.to_string(),
+                    retention: retention.map_or(f64::INFINITY, |retention| retention.as_secs_f64()),
+                })
+            })
+            .collect();
+        let stats = self.content.tier(&self.pool, &placements).await?;
+        self.metrics.tiered(stats);
+        let count = |value: u64| i64::try_from(value).unwrap_or(i64::MAX);
+        let client = self.pool.get().await?;
+        record_tier_run()
+            .bind(
+                &client,
+                &id,
+                &count(stats.moved_chunks),
+                &count(stats.moved_bytes),
+            )
+            .await?;
+        tracing::info!(
+            moved_chunks = stats.moved_chunks,
+            moved_bytes = stats.moved_bytes,
+            "moved chunks to longer-lived stores"
+        );
+        self.record_store_sizes(&client).await
+    }
+
     /// Records the size of every configured store.
     async fn record_store_sizes(&self, client: &Client) -> Result<(), TaskError> {
         let sizes: BTreeMap<String, StoreSizes> = store_sizes()
@@ -187,6 +229,9 @@ pub(crate) enum TaskError {
     /// Recording the task's results failed.
     #[error("failed to record the results")]
     Database(#[from] tokio_postgres::Error),
+    /// Moving chunks between stores failed.
+    #[error("failed to move chunks between stores")]
+    Tier(#[from] TierError),
     /// No database connection was available.
     #[error("failed to get a database connection")]
     Pool(#[from] PoolError),

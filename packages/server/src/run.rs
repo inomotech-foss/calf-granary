@@ -1,4 +1,4 @@
-//! The `prune` command.
+//! The commands that run one task, such as `prune`.
 
 use core::error::Error;
 use std::path::PathBuf;
@@ -15,7 +15,7 @@ use crate::tasks::{Runner, TaskError, TaskKind, WorkerId};
 
 /// Command-line arguments of the `prune` command.
 #[derive(Debug, Args)]
-pub(crate) struct PruneArgs {
+pub(crate) struct RunArgs {
     /// Path to the configuration file.
     #[arg(long, env = "GRANARY_CONFIG")]
     config: PathBuf,
@@ -24,22 +24,17 @@ pub(crate) struct PruneArgs {
     database: DatabaseArgs,
 }
 
-impl PruneArgs {
-    /// Prunes every cache once and records the run as a task.
-    pub(crate) async fn run(self) -> Result<(), PruneCommandError> {
+impl RunArgs {
+    /// Runs a task once and records it like a scheduled one.
+    pub(crate) async fn run(self, kind: TaskKind) -> Result<(), RunError> {
         let config = Config::load(&self.config)?;
         let caches = config.caches()?;
         let content = config.content()?;
-        let pool = self
-            .database
-            .open()?
-            .pool()
-            .map_err(PruneCommandError::Pool)?;
-        let client = pool.get().await.map_err(PruneCommandError::Connect)?;
+        let pool = self.database.open()?.pool().map_err(RunError::Pool)?;
+        let client = pool.get().await.map_err(RunError::Connect)?;
         migrations::verify(&client).await?;
 
         let worker = WorkerId::current();
-        let kind = TaskKind::Prune;
         let id = start_task()
             .bind(&client, &kind.name(), &"cli", &worker.as_ref())
             .one()
@@ -56,7 +51,12 @@ impl PruneArgs {
                 fail_task()
                     .bind(&client, &1, &0.0, &err.describe(), &id, &worker.as_ref())
                     .await?;
-                tracing::error!(error = &err as &dyn Error, task = id, "prune failed");
+                tracing::error!(
+                    error = &err as &dyn Error,
+                    task = id,
+                    kind = kind.name(),
+                    "task failed"
+                );
                 Err(err.into())
             }
         }
@@ -65,7 +65,7 @@ impl PruneArgs {
 
 /// Errors from the `prune` command.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum PruneCommandError {
+pub(crate) enum RunError {
     /// The configuration is invalid.
     #[error(transparent)]
     Config(#[from] ConfigError),
