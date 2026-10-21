@@ -146,6 +146,7 @@ in
           export GRANARY_TOKEN_SECRET=$(cat "$secret")
           export AWS_ENDPOINT=http://127.0.0.1:18333
           ${services.s3Exports}
+          ${services.bitbakeExports}
           EOF
           # shellcheck source=/dev/null
           source "$GRANARY_DEV_DIR/env"

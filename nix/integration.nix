@@ -36,6 +36,7 @@
             export GRANARY_DATABASE_CA="$services/tls/ca.crt"
             export AWS_ENDPOINT="http://127.0.0.1:$s3_port"
             ${services.s3Exports}
+            ${services.bitbakeExports}
             ready=
             for _ in $(seq 120); do
               if ${services.createBuckets [ "granary-test" ]} 2>/dev/null; then

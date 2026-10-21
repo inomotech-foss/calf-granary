@@ -444,7 +444,7 @@ pub(super) async fn public_key(
 ) -> Response {
     match state.caches.get(&cache).map(Cache::protocol) {
         Some(Protocol::Nix(nix)) => text_response("text/plain", nix.key.public_key(), false),
-        Some(Protocol::Files) | None => StatusCode::NOT_FOUND.into_response(),
+        Some(Protocol::Files | Protocol::Hashserv) | None => StatusCode::NOT_FOUND.into_response(),
     }
 }
 

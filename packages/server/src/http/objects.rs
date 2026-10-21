@@ -1,5 +1,6 @@
 //! Reading and writing objects in caches.
 
+mod hashserv;
 mod metrics;
 mod nix;
 
@@ -120,6 +121,7 @@ pub(super) fn router(
         .route("/_api/nix/{cache}/upload", put(nix::upload))
         .route("/_api/nix/{cache}/missing", post(nix::missing))
         .route("/_api/nix/{cache}/public-key", get(nix::public_key))
+        .route("/_hashserv/{cache}", get(hashserv::connect))
         .layer(DefaultBodyLimit::disable())
         .with_state(Objects {
             caches,
@@ -199,8 +201,10 @@ async fn put_object(
     let Some(found) = state.caches.get(&cache) else {
         return StatusCode::NOT_FOUND;
     };
-    if let Protocol::Nix(_) = found.protocol() {
-        return nix::put(&state, found, &key, body).await;
+    match found.protocol() {
+        Protocol::Files => {}
+        Protocol::Nix(_) => return nix::put(&state, found, &key, body).await,
+        Protocol::Hashserv => return StatusCode::METHOD_NOT_ALLOWED,
     }
     let Ok(object) = ObjectKey::try_from(key.as_str()) else {
         return StatusCode::BAD_REQUEST;

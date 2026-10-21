@@ -6,6 +6,8 @@
 #[cfg(test)]
 mod harness;
 #[cfg(test)]
+mod hashserv;
+#[cfg(test)]
 mod migrations;
 #[cfg(test)]
 mod nix;

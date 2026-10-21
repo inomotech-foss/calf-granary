@@ -41,6 +41,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "nix_upload",
         sql: include_str!("../migrations/0007_nix_upload.sql"),
     },
+    Migration {
+        version: 8,
+        name: "hashserv",
+        sql: include_str!("../migrations/0008_hashserv.sql"),
+    },
 ];
 
 /// The advisory lock that serializes concurrent migration runs.

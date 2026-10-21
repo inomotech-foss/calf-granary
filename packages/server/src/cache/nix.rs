@@ -17,7 +17,7 @@ use futures::stream::BoxStream;
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 use tokio_util::io::{ReaderStream, StreamReader};
 
-use super::{Cache, CacheName, ObjectKey, Stored};
+use super::{Cache, CacheName, NoStore, ObjectKey, Stored};
 use crate::content::{Content, WriteError};
 use crate::nix::{InvalidStorePath, PathInfo, StorePath, StorePathHash, UploadedNarInfo};
 
@@ -114,7 +114,7 @@ impl Cache {
         if exists {
             return Ok(Stored::Existing);
         }
-        let blob = content.write_chunked(pool, &self.store, body).await?;
+        let blob = content.write_chunked(pool, self.store()?, body).await?;
         if blob.hash() != info.nar_hash.as_slice() || blob.size != info.nar_size {
             return Err(NixPutError::Mismatch);
         }
@@ -206,7 +206,7 @@ impl Cache {
                 ReaderStream::new(decoder).boxed()
             }
         };
-        let blob = content.write_chunked(pool, &self.store, plain).await?;
+        let blob = content.write_chunked(pool, self.store()?, plain).await?;
         let (file_hash, file_size) = {
             let file = file.lock().unwrap_or_else(PoisonError::into_inner);
             (file.0.clone().finish().as_ref().to_vec(), file.1)
@@ -304,6 +304,9 @@ pub(crate) enum NixPutError {
     /// The NAR doesn't match the claimed hash or size.
     #[error("the NAR doesn't match its hash and size")]
     Mismatch,
+    /// The cache keeps no content.
+    #[error(transparent)]
+    NoStore(#[from] NoStore),
     /// A narinfo names a NAR file that wasn't uploaded.
     #[error("the narinfo names a NAR file that wasn't uploaded")]
     MissingNar,

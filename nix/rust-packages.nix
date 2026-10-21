@@ -37,7 +37,13 @@ in
         src = lib.cleanSourceWith {
           src = self;
           name = "source";
-          filter = path: type: craneLib.filterCargoSources path type || lib.hasSuffix ".sql" path;
+          filter =
+            path: type:
+            craneLib.filterCargoSources path type
+            || lib.any (suffix: lib.hasSuffix suffix path) [
+              ".sql"
+              ".py"
+            ];
         };
         strictDeps = true;
         version = workspaceVersion;

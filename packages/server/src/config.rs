@@ -91,15 +91,25 @@ impl Config {
     /// Fails if a cache names an unknown store, or if a fallback names an
     /// unknown cache or a cache that has a fallback itself.
     pub(crate) fn caches(&self) -> Result<Caches, ConfigError> {
-        if let Some((name, cache)) = self
-            .caches
-            .iter()
-            .find(|(_, cache)| !self.stores.contains_key(&cache.store))
-        {
-            return Err(ConfigError::Store {
-                cache: name.clone(),
-                store: cache.store.clone(),
-            });
+        for (name, cache) in &self.caches {
+            match (&cache.store, cache.protocol) {
+                (Some(store), ProtocolName::Files | ProtocolName::Nix)
+                    if !self.stores.contains_key(store) =>
+                {
+                    return Err(ConfigError::Store {
+                        cache: name.clone(),
+                        store: store.clone(),
+                    });
+                }
+                (Some(_), ProtocolName::Files | ProtocolName::Nix)
+                | (None, ProtocolName::Hashserv) => {}
+                (None, ProtocolName::Files | ProtocolName::Nix)
+                | (Some(_), ProtocolName::Hashserv) => {
+                    return Err(ConfigError::StoreSetting {
+                        cache: name.clone(),
+                    });
+                }
+            }
         }
         let mut caches = BTreeMap::new();
         for (name, cache) in self
@@ -190,8 +200,9 @@ impl StoreConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CacheConfig {
-    /// The store that new chunks go to.
-    store: StoreName,
+    /// The store that new chunks go to. Required unless the protocol is
+    /// hashserv, which keeps no content.
+    store: Option<StoreName>,
     /// Whether content is split into deduplicated, compressed chunks.
     ///
     /// Worth it for content that isn't compressed already.
@@ -217,6 +228,9 @@ impl CacheConfig {
     fn build(&self, name: &CacheName, fallback: Option<Arc<Cache>>) -> Result<Cache, ConfigError> {
         let protocol = match (self.protocol, &self.signing_key) {
             (ProtocolName::Files, None) if self.priority.is_none() => Protocol::Files,
+            (ProtocolName::Hashserv, None) if self.priority.is_none() && !self.chunking => {
+                Protocol::Hashserv
+            }
             (ProtocolName::Nix, Some(path)) => Protocol::Nix(NixCache {
                 key: SigningKey::load(path).map_err(|source| ConfigError::SigningKey {
                     cache: name.clone(),
@@ -224,7 +238,7 @@ impl CacheConfig {
                 })?,
                 priority: self.priority.unwrap_or(DEFAULT_NIX_PRIORITY),
             }),
-            (ProtocolName::Files, _) | (ProtocolName::Nix, None) => {
+            (ProtocolName::Files | ProtocolName::Hashserv, _) | (ProtocolName::Nix, None) => {
                 return Err(ConfigError::NixSettings {
                     cache: name.clone(),
                 });
@@ -304,6 +318,13 @@ pub(crate) enum ConfigError {
         /// The error from loading the key.
         #[source]
         source: SigningKeyError,
+    },
+    /// A cache has a store although its protocol keeps no content, or lacks
+    /// one although it does.
+    #[error("cache {cache}: files and nix caches need a store, hashserv caches have none")]
+    StoreSetting {
+        /// The cache.
+        cache: CacheName,
     },
     /// A cache names an unknown store.
     #[error("cache {cache} names the unknown store {store}")]

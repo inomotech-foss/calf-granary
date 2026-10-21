@@ -2,6 +2,21 @@
 rec {
   postgresql = pkgs.postgresql_18;
 
+  # The hash equivalence client that the tests speak to granary with.
+  bitbake = pkgs.fetchFromGitHub {
+    owner = "openembedded";
+    repo = "bitbake";
+    rev = "3ccdabf1ba2b65dde0025ad04f84b80c02a1fd6e";
+    hash = "sha256-JXYnori7Ibd/2qjiLzbkpXwRMucq1Ly3VlI7pWOOhUE=";
+  };
+
+  python = pkgs.python3.withPackages (packages: [ packages.websockets ]);
+
+  bitbakeExports = lib.concatStringsSep "\n" [
+    "export BITBAKE_ROOT=${bitbake}"
+    "export BITBAKE_PYTHON=${lib.getExe python}"
+  ];
+
   curl = "${lib.getExe pkgs.curl} --fail --silent --show-error";
 
   # A CA and a certificate for 127.0.0.1, created once per directory.

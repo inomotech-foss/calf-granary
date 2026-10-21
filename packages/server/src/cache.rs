@@ -1,5 +1,6 @@
 //! Caches and the entries in them.
 
+mod hashserv;
 mod nix;
 
 use core::borrow::Borrow;
@@ -19,6 +20,7 @@ use deadpool_postgres::{Client, Pool, PoolError};
 use futures::Stream;
 use serde::{Deserialize, Serialize};
 
+pub(crate) use self::hashserv::Report;
 pub(crate) use self::nix::{NarCompression, NixPutError};
 use crate::content::{Content, WriteError};
 use crate::nix::SigningKey;
@@ -158,6 +160,8 @@ pub(crate) enum ProtocolName {
     Files,
     /// A Nix binary cache.
     Nix,
+    /// A hash equivalence server for Yocto builds.
+    Hashserv,
 }
 
 /// The protocol that clients of a cache speak.
@@ -167,6 +171,8 @@ pub(crate) enum Protocol {
     Files,
     /// A Nix binary cache.
     Nix(NixCache),
+    /// A hash equivalence server for Yocto builds.
+    Hashserv,
 }
 
 impl Protocol {
@@ -175,6 +181,7 @@ impl Protocol {
         match self {
             Self::Files => ProtocolName::Files,
             Self::Nix(_) => ProtocolName::Nix,
+            Self::Hashserv => ProtocolName::Hashserv,
         }
     }
 }
@@ -193,8 +200,8 @@ pub(crate) struct NixCache {
 pub(crate) struct Cache {
     /// The name.
     name: CacheName,
-    /// The store that new chunks go to.
-    store: StoreName,
+    /// The store that new chunks go to, unless the cache keeps no content.
+    store: Option<StoreName>,
     /// Whether content is split into deduplicated, compressed chunks.
     chunking: bool,
     /// How long entries are kept after they were last read or written.
@@ -209,7 +216,7 @@ impl Cache {
     /// Creates a cache.
     pub(crate) const fn new(
         name: CacheName,
-        store: StoreName,
+        store: Option<StoreName>,
         chunking: bool,
         retention: Option<Duration>,
         protocol: Protocol,
@@ -233,6 +240,13 @@ impl Cache {
     /// The protocol that clients speak.
     pub(crate) const fn protocol(&self) -> &Protocol {
         &self.protocol
+    }
+
+    /// The store that new chunks go to.
+    fn store(&self) -> Result<&StoreName, NoStore> {
+        self.store
+            .as_ref()
+            .ok_or_else(|| NoStore(self.name.clone()))
     }
 
     /// Looks up an entry, trying the fallback cache when it's missing here.
@@ -291,9 +305,9 @@ impl Cache {
             return Ok(Stored::Existing);
         }
         let blob = if self.chunking {
-            content.write_chunked(pool, &self.store, body).await?
+            content.write_chunked(pool, self.store()?, body).await?
         } else {
-            content.write(pool, &self.store, body).await?
+            content.write(pool, self.store()?, body).await?
         };
         let mut client = pool.get().await?;
         let transaction = client.transaction().await?;
@@ -324,12 +338,20 @@ impl Cache {
             .ok()
             .and_then(|retention| now.checked_sub_signed(retention))
             .ok_or(ExpireError::Retention)?;
+        if matches!(self.protocol, Protocol::Hashserv) {
+            return Ok(Some(self.expire_unihashes(client, cutoff).await?));
+        }
         let expired = expire_entries()
             .bind(client, &self.name.as_ref(), &cutoff.fixed_offset())
             .await?;
         Ok(Some(expired))
     }
 }
+
+/// A cache that keeps no content.
+#[derive(Debug, thiserror::Error)]
+#[error("cache {0} keeps no content")]
+pub(crate) struct NoStore(CacheName);
 
 /// Errors from storing an object.
 #[derive(Debug, thiserror::Error)]
@@ -340,6 +362,9 @@ pub(crate) enum PutError {
     /// Recording the entry failed.
     #[error("failed to record the entry")]
     Database(#[from] tokio_postgres::Error),
+    /// The cache keeps no content.
+    #[error(transparent)]
+    NoStore(#[from] NoStore),
     /// Storing the content failed.
     #[error(transparent)]
     Write(#[from] WriteError),
