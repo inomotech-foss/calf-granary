@@ -8,6 +8,8 @@ mod harness;
 #[cfg(test)]
 mod migrations;
 #[cfg(test)]
+mod nix;
+#[cfg(test)]
 mod objects;
 #[cfg(test)]
 mod prune;

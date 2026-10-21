@@ -1,6 +1,7 @@
 //! Deleting content that no entry references any more.
 
 use core::error::Error;
+use core::future;
 use std::collections::HashSet;
 
 use calf_granary_server_db::queries::content::{
@@ -75,7 +76,7 @@ impl Content {
                     }
                 })
                 .buffer_unordered(DELETE_CONCURRENCY)
-                .filter_map(async |deleted| deleted)
+                .filter_map(future::ready)
                 .collect()
                 .await;
             let ids: Vec<i64> = deleted.iter().map(|(id, _)| *id).collect();

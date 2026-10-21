@@ -13,14 +13,19 @@ use reqwest::Client;
 use serde::Deserialize;
 use toml::de::Error as TomlError;
 
-use crate::cache::{Cache, CacheName, Caches};
+use crate::cache::{Cache, CacheName, Caches, NixCache, Protocol, ProtocolName};
 use crate::content::Content;
 use crate::duration::ConfigDuration;
 use crate::exchange::Exchange;
+use crate::nix::{SigningKey, SigningKeyError};
 use crate::oidc::{Issuer, IssuerConfig};
 use crate::store::{StoreName, Stores};
 use crate::tiers::Tiers;
 use crate::token::TokenKey;
+
+/// The `Priority` of Nix caches unless configured, just after
+/// cache.nixos.org.
+const DEFAULT_NIX_PRIORITY: u32 = 41;
 
 /// How long unreferenced content is kept unless configured.
 const DEFAULT_COLLECTION_GRACE: Duration = Duration::from_hours(24);
@@ -102,7 +107,7 @@ impl Config {
             .iter()
             .filter(|(_, cache)| cache.fallback.is_none())
         {
-            caches.insert(name.clone(), Arc::new(cache.build(name, None)));
+            caches.insert(name.clone(), Arc::new(cache.build(name, None)?));
         }
         for (name, cache) in &self.caches {
             let Some(fallback) = &cache.fallback else {
@@ -115,7 +120,7 @@ impl Config {
                     cache: name.clone(),
                     fallback: fallback.clone(),
                 })?;
-            caches.insert(name.clone(), Arc::new(cache.build(name, Some(fallback))));
+            caches.insert(name.clone(), Arc::new(cache.build(name, Some(fallback))?));
         }
         Ok(Caches::new(caches))
     }
@@ -192,6 +197,13 @@ struct CacheConfig {
     /// Worth it for content that isn't compressed already.
     #[serde(default)]
     chunking: bool,
+    /// The protocol that clients speak.
+    #[serde(default)]
+    protocol: ProtocolName,
+    /// The Nix secret key that signs narinfos. Required for Nix caches.
+    signing_key: Option<path::PathBuf>,
+    /// The `Priority` in `nix-cache-info`. Lower numbers are preferred.
+    priority: Option<u32>,
     /// How long entries are kept after they were last read or written.
     retention: Option<ConfigDuration>,
     /// The cache to read from when an entry is missing.
@@ -200,14 +212,40 @@ struct CacheConfig {
 
 impl CacheConfig {
     /// Creates the cache.
-    fn build(&self, name: &CacheName, fallback: Option<Arc<Cache>>) -> Cache {
-        Cache::new(
+    ///
+    /// Nix caches always chunk, because NARs are uncompressed.
+    fn build(&self, name: &CacheName, fallback: Option<Arc<Cache>>) -> Result<Cache, ConfigError> {
+        let protocol = match (self.protocol, &self.signing_key) {
+            (ProtocolName::Files, None) if self.priority.is_none() => Protocol::Files,
+            (ProtocolName::Nix, Some(path)) => Protocol::Nix(NixCache {
+                key: SigningKey::load(path).map_err(|source| ConfigError::SigningKey {
+                    cache: name.clone(),
+                    source,
+                })?,
+                priority: self.priority.unwrap_or(DEFAULT_NIX_PRIORITY),
+            }),
+            (ProtocolName::Files, _) | (ProtocolName::Nix, None) => {
+                return Err(ConfigError::NixSettings {
+                    cache: name.clone(),
+                });
+            }
+        };
+        if let Some(fallback) = &fallback
+            && fallback.protocol().name() != self.protocol
+        {
+            return Err(ConfigError::FallbackProtocol {
+                cache: name.clone(),
+            });
+        }
+        let chunking = self.chunking || self.protocol == ProtocolName::Nix;
+        Ok(Cache::new(
             name.clone(),
             self.store.clone(),
-            self.chunking,
+            chunking,
             self.retention.map(Into::into),
+            protocol,
             fallback,
-        )
+        ))
     }
 }
 
@@ -222,9 +260,24 @@ pub(crate) enum ConfigError {
         /// The fallback cache.
         fallback: CacheName,
     },
+    /// A cache falls back to a cache with another protocol.
+    #[error("cache {cache} falls back to a cache with another protocol")]
+    FallbackProtocol {
+        /// The cache with the fallback.
+        cache: CacheName,
+    },
     /// The HTTP client for fetching issuer keys can't be created.
     #[error("failed to create the HTTP client")]
     HttpClient(#[source] reqwest::Error),
+    /// A cache sets Nix settings without being a Nix cache, or is a Nix cache
+    /// without a signing key.
+    #[error(
+        "cache {cache}: signing_key and priority only apply to nix caches, which need signing_key"
+    )]
+    NixSettings {
+        /// The cache.
+        cache: CacheName,
+    },
     /// The file isn't valid.
     #[error("failed to parse {}", path.display())]
     Parse {
@@ -242,6 +295,15 @@ pub(crate) enum ConfigError {
         /// The error from the operating system.
         #[source]
         source: io::Error,
+    },
+    /// A signing key can't be loaded.
+    #[error("failed to load the signing key of cache {cache}")]
+    SigningKey {
+        /// The cache.
+        cache: CacheName,
+        /// The error from loading the key.
+        #[source]
+        source: SigningKeyError,
     },
     /// A cache names an unknown store.
     #[error("cache {cache} names the unknown store {store}")]

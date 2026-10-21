@@ -1,6 +1,7 @@
 //! Reading and writing objects in caches.
 
 mod metrics;
+mod nix;
 
 use core::error::Error;
 use std::sync::Arc;
@@ -11,16 +12,16 @@ use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE, ETAG, LAST_MODIFIED};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse as _, Response};
-use axum::routing::get;
+use axum::routing::{get, post, put};
 use deadpool_postgres::{Client, Pool};
 
 use self::metrics::{Lookup, ObjectMetrics, Upload};
 use super::bearer;
 use crate::access::{AccessLog, Accessed};
-use crate::cache::{Caches, Hit, ObjectKey, PutError, Stored};
-use crate::content::{Content, WriteError};
+use crate::cache::{Caches, Hit, ObjectKey, Protocol, PutError, Stored};
+use crate::content::{Content, Encoding, WriteError};
 use crate::hex;
-use crate::token::TokenKey;
+use crate::token::{Grant, TokenKey};
 
 /// Shared state of the object routes.
 #[derive(Clone, Debug)]
@@ -80,6 +81,22 @@ impl Objects {
         }
     }
 
+    /// Checks that the request carries a granary token that grants the
+    /// cache.
+    fn authorize(&self, headers: &HeaderMap, cache: &str) -> Result<Grant, StatusCode> {
+        let token = bearer(headers).ok_or(StatusCode::UNAUTHORIZED)?;
+        let grant = self.key.verify(token).map_err(|err| {
+            tracing::info!(error = &err as &dyn Error, "rejected a write token");
+            StatusCode::UNAUTHORIZED
+        })?;
+        if grant.allows(cache) {
+            Ok(grant)
+        } else {
+            tracing::info!(sub = grant.sub, cache, "rejected a write outside the grant");
+            Err(StatusCode::FORBIDDEN)
+        }
+    }
+
     /// Takes a database connection.
     async fn client(&self) -> Result<Client, StatusCode> {
         self.pool.get().await.map_err(|err| {
@@ -105,6 +122,9 @@ pub(super) fn router(
             "/{cache}/{*key}",
             get(get_object).head(head_object).put(put_object),
         )
+        .route("/_api/nix/{cache}/upload", put(nix::upload))
+        .route("/_api/nix/{cache}/missing", post(nix::missing))
+        .route("/_api/nix/{cache}/public-key", get(nix::public_key))
         .layer(DefaultBodyLimit::disable())
         .with_state(Objects {
             caches,
@@ -118,6 +138,12 @@ pub(super) fn router(
 
 /// Streams an object, from the fallback cache if needed.
 async fn get_object(State(state): State<Objects>, path: Path<(String, String)>) -> Response {
+    let Path((cache, key)) = &path;
+    if let Some(found) = state.caches.get(cache)
+        && let Protocol::Nix(settings) = found.protocol()
+    {
+        return nix::get(&state, found, settings, key, false).await;
+    }
     let client = match state.client().await {
         Ok(client) => client,
         Err(status) => return status.into_response(),
@@ -126,9 +152,12 @@ async fn get_object(State(state): State<Objects>, path: Path<(String, String)>) 
         Ok(hit) => hit,
         Err(status) => return status.into_response(),
     };
-    match state.content.read(&client, hit.blob_id).await {
+    match state
+        .content
+        .read(&client, hit.blob_id, Encoding::Plain)
+        .await
+    {
         Ok(stream) => {
-            let Path((cache, _)) = &path;
             state.metrics.served(cache, hit.size);
             (object_headers(&hit), Body::from_stream(stream)).into_response()
         }
@@ -141,6 +170,12 @@ async fn get_object(State(state): State<Objects>, path: Path<(String, String)>) 
 
 /// Returns the headers of an object, from the fallback cache if needed.
 async fn head_object(State(state): State<Objects>, path: Path<(String, String)>) -> Response {
+    let Path((cache, key)) = &path;
+    if let Some(found) = state.caches.get(cache)
+        && let Protocol::Nix(settings) = found.protocol()
+    {
+        return nix::get(&state, found, settings, key, true).await;
+    }
     let client = match state.client().await {
         Ok(client) => client,
         Err(status) => return status.into_response(),
@@ -161,23 +196,16 @@ async fn put_object(
     headers: HeaderMap,
     body: Body,
 ) -> StatusCode {
-    let Some(token) = bearer(&headers) else {
-        return StatusCode::UNAUTHORIZED;
-    };
-    let grant = match state.key.verify(token) {
+    let grant = match state.authorize(&headers, &cache) {
         Ok(grant) => grant,
-        Err(err) => {
-            tracing::info!(error = &err as &dyn Error, "rejected a write token");
-            return StatusCode::UNAUTHORIZED;
-        }
+        Err(status) => return status,
     };
-    if !grant.allows(&cache) {
-        tracing::info!(sub = grant.sub, cache, "rejected a write outside the grant");
-        return StatusCode::FORBIDDEN;
-    }
     let Some(found) = state.caches.get(&cache) else {
         return StatusCode::NOT_FOUND;
     };
+    if !matches!(found.protocol(), Protocol::Files) {
+        return StatusCode::METHOD_NOT_ALLOWED;
+    }
     let Ok(object) = ObjectKey::try_from(key.as_str()) else {
         return StatusCode::BAD_REQUEST;
     };

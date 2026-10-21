@@ -1,0 +1,40 @@
+--! insert_nix_path (deriver?, system?, ca?)
+INSERT INTO nix_path (cache, key, store_path, refs, deriver, system, ca)
+VALUES (
+    :cache::text,
+    :key::text,
+    :store_path::text,
+    :refs::text[],
+    :deriver::text,
+    :system::text,
+    :ca::text
+);
+
+--! find_nix_path : (deriver?, system?, ca?, file_size?)
+SELECT
+    nix_path.store_path,
+    nix_path.refs,
+    nix_path.deriver,
+    nix_path.system,
+    nix_path.ca,
+    entry.blob_id,
+    blob.hash,
+    blob.size,
+    (
+        SELECT CASE WHEN bool_and(chunk.compression = 'zstd') THEN sum(chunk.stored_size)::bigint END
+        FROM blob_chunk
+        JOIN chunk ON chunk.id = blob_chunk.chunk_id
+        WHERE blob_chunk.blob_id = blob.id
+    ) AS file_size
+FROM nix_path
+JOIN entry USING (cache, key)
+JOIN blob ON blob.id = entry.blob_id
+WHERE nix_path.cache = :cache::text AND nix_path.key = :key::text;
+
+--! missing_nix_paths
+SELECT hash
+FROM unnest(:hashes::text[]) AS requested (hash)
+WHERE NOT EXISTS (
+    SELECT FROM nix_path
+    WHERE nix_path.key = requested.hash AND nix_path.cache = any(:caches::text[])
+);

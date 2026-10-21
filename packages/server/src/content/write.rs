@@ -47,6 +47,13 @@ pub(crate) struct NewBlob {
     chunks: Vec<i64>,
 }
 
+impl NewBlob {
+    /// The SHA-256 of the plain content.
+    pub(crate) fn hash(&self) -> &[u8] {
+        &self.hash
+    }
+}
+
 impl Content {
     /// Stores content as one uncompressed chunk in `store`.
     ///

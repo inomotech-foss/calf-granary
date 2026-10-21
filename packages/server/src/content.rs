@@ -18,6 +18,7 @@ use aws_lc_rs::rand;
 use object_store::path::Path;
 
 pub(crate) use self::collect::{CollectError, CollectStats};
+pub(crate) use self::read::Encoding;
 pub(crate) use self::write::WriteError;
 use crate::hex;
 use crate::store::Stores;

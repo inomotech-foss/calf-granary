@@ -12,6 +12,7 @@ mod hex;
 mod http;
 mod migrations;
 mod mint;
+mod nix;
 mod notifications;
 mod oidc;
 mod prune;

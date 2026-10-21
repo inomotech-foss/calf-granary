@@ -13,7 +13,16 @@ use object_store::{ObjectStore, ObjectStoreExt as _};
 use tokio::task::{self, JoinError};
 use zstd::bulk;
 
-use super::{Content, UNCOMPRESSED, ZSTD};
+use super::{Content, UNCOMPRESSED, ZSTD, ZSTD_LEVEL};
+
+/// How a blob's bytes are delivered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Encoding {
+    /// The plain content.
+    Plain,
+    /// One zstd frame per chunk, which zstd decoders read as one stream.
+    Zstd,
+}
 
 /// A chunk to read.
 struct Part {
@@ -25,29 +34,38 @@ struct Part {
     compressed: bool,
     /// The plain size in bytes.
     size: usize,
+    /// How the chunk is delivered.
+    encoding: Encoding,
 }
 
 impl Part {
-    /// Streams the plain bytes of the chunk.
+    /// Streams the chunk in its encoding.
     ///
-    /// Plain chunks are streamed as they are. Compressed chunks are small, so
-    /// they are fetched whole and decompressed.
+    /// Chunks that are stored in the requested encoding are streamed as they
+    /// are. Others are fetched whole and converted, which only happens for
+    /// small chunks shared between chunked and whole content.
     async fn open(self) -> Result<BoxStream<'static, Result<Bytes, ChunkError>>, ChunkError> {
         let object = self.store.get(&self.key).await.map_err(ChunkError::Store)?;
-        if !self.compressed {
+        if self.compressed == (self.encoding == Encoding::Zstd) {
             return Ok(object.into_stream().map_err(ChunkError::Store).boxed());
         }
-        let frame = object.bytes().await.map_err(ChunkError::Store)?;
-        let plain = task::spawn_blocking(move || bulk::decompress(&frame, self.size))
-            .await
-            .map_err(ChunkError::Task)?
-            .map_err(ChunkError::Decompress)?;
-        Ok(stream::once(async { Ok(Bytes::from(plain)) }).boxed())
+        let stored = object.bytes().await.map_err(ChunkError::Store)?;
+        let converted = task::spawn_blocking(move || {
+            if self.compressed {
+                bulk::decompress(&stored, self.size)
+            } else {
+                bulk::compress(&stored, ZSTD_LEVEL)
+            }
+        })
+        .await
+        .map_err(ChunkError::Task)?
+        .map_err(ChunkError::Convert)?;
+        Ok(stream::once(async { Ok(Bytes::from(converted)) }).boxed())
     }
 }
 
 impl Content {
-    /// Streams the plain content of a blob.
+    /// Streams the content of a blob in the encoding.
     ///
     /// The chunk list is read up front, so the stream doesn't hold a
     /// database connection.
@@ -55,6 +73,7 @@ impl Content {
         &self,
         client: &C,
         blob_id: i64,
+        encoding: Encoding,
     ) -> Result<BoxStream<'static, Result<Bytes, ChunkError>>, ReadError>
     where
         C: GenericClient + Sync,
@@ -74,6 +93,7 @@ impl Content {
                 store: Arc::clone(store),
                 key: Path::from(chunk.object_key),
                 compressed,
+                encoding,
                 size: usize::try_from(chunk.size).map_err(|_overflow| ReadError::TooLarge)?,
             });
         }
@@ -101,13 +121,14 @@ pub(crate) enum ReadError {
 /// Errors from streaming a chunk.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ChunkError {
-    /// The chunk isn't a valid zstd frame of the recorded size.
-    #[error("failed to decompress a chunk")]
-    Decompress(#[source] io::Error),
+    /// The chunk can't be compressed, or isn't a valid zstd frame of the
+    /// recorded size.
+    #[error("failed to convert a chunk")]
+    Convert(#[source] io::Error),
     /// Object storage failed.
     #[error("failed to read a chunk")]
     Store(#[source] object_store::Error),
-    /// A decompression task panicked.
-    #[error("the decompression task failed")]
+    /// A conversion task panicked.
+    #[error("the conversion task failed")]
     Task(#[source] JoinError),
 }

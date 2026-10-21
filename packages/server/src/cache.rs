@@ -1,5 +1,7 @@
 //! Caches and the entries in them.
 
+mod nix;
+
 use core::borrow::Borrow;
 use core::error::Error;
 use core::fmt;
@@ -17,7 +19,9 @@ use deadpool_postgres::{Client, Pool, PoolError};
 use futures::Stream;
 use serde::{Deserialize, Serialize};
 
+pub(crate) use self::nix::NixPutError;
 use crate::content::{Content, WriteError};
+use crate::nix::SigningKey;
 use crate::store::StoreName;
 
 /// The name of a cache.
@@ -145,6 +149,45 @@ pub(crate) enum Stored {
     Existing,
 }
 
+/// The name of a protocol in the configuration.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ProtocolName {
+    /// Plain files under arbitrary keys, as Yocto uses them.
+    #[default]
+    Files,
+    /// A Nix binary cache.
+    Nix,
+}
+
+/// The protocol that clients of a cache speak.
+#[derive(Debug)]
+pub(crate) enum Protocol {
+    /// Plain files under arbitrary keys.
+    Files,
+    /// A Nix binary cache.
+    Nix(NixCache),
+}
+
+impl Protocol {
+    /// The name in the configuration.
+    pub(crate) const fn name(&self) -> ProtocolName {
+        match self {
+            Self::Files => ProtocolName::Files,
+            Self::Nix(_) => ProtocolName::Nix,
+        }
+    }
+}
+
+/// The settings of a Nix binary cache.
+#[derive(Debug)]
+pub(crate) struct NixCache {
+    /// Signs the narinfos.
+    pub(crate) key: SigningKey,
+    /// The `Priority` in `nix-cache-info`.
+    pub(crate) priority: u32,
+}
+
 /// A cache: a namespace of entries with a retention.
 #[derive(Debug)]
 pub(crate) struct Cache {
@@ -156,6 +199,8 @@ pub(crate) struct Cache {
     chunking: bool,
     /// How long entries are kept after they were last read or written.
     retention: Option<Duration>,
+    /// The protocol that clients speak.
+    protocol: Protocol,
     /// The cache to read from when an entry is missing.
     fallback: Option<Arc<Self>>,
 }
@@ -167,6 +212,7 @@ impl Cache {
         store: StoreName,
         chunking: bool,
         retention: Option<Duration>,
+        protocol: Protocol,
         fallback: Option<Arc<Self>>,
     ) -> Self {
         Self {
@@ -174,8 +220,19 @@ impl Cache {
             store,
             chunking,
             retention,
+            protocol,
             fallback,
         }
+    }
+
+    /// The name.
+    pub(crate) const fn name(&self) -> &CacheName {
+        &self.name
+    }
+
+    /// The protocol that clients speak.
+    pub(crate) const fn protocol(&self) -> &Protocol {
+        &self.protocol
     }
 
     /// Looks up an entry, trying the fallback cache when it's missing here.

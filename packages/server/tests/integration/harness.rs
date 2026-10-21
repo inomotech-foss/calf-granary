@@ -62,7 +62,8 @@ impl Stack {
     /// Creates the database and writes the configuration.
     ///
     /// Unless `config` defines stores, a store named `test` is added. `$bucket`
-    /// and `$prefix` are replaced with the test's bucket and unique prefix.
+    /// and `$prefix` are replaced with the test's bucket and unique prefix,
+    /// `$dir` with the directory of [`Self::write`].
     pub(crate) async fn new(config: &str) -> Self {
         let admin_url =
             env::var("GRANARY_DATABASE_URL").expect("GRANARY_DATABASE_URL locates Postgres");
@@ -97,7 +98,10 @@ impl Stack {
         } else {
             format!("{config}\n{STORE}")
         };
-        let config = config.replace("$bucket", &bucket).replace("$prefix", &id);
+        let config = config
+            .replace("$bucket", &bucket)
+            .replace("$prefix", &id)
+            .replace("$dir", &dir.display().to_string());
         fs::write(dir.join("config.toml"), config).unwrap();
         Self {
             database_url: format!("{admin_url} dbname={id}"),
@@ -106,6 +110,11 @@ impl Stack {
             bucket,
             dir,
         }
+    }
+
+    /// Writes a file next to the configuration file.
+    pub(crate) fn write(&self, name: &str, contents: &str) {
+        fs::write(self.dir.join(name), contents).unwrap();
     }
 
     /// Opens the test's store directly.
@@ -171,7 +180,10 @@ impl Stack {
         let mut server = Server {
             child,
             url: format!("http://{address}"),
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .pool_max_idle_per_host(0)
+                .build()
+                .unwrap(),
         };
         server.wait_ready().await;
         server
