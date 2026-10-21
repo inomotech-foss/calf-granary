@@ -36,6 +36,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "nix",
         sql: include_str!("../migrations/0006_nix.sql"),
     },
+    Migration {
+        version: 7,
+        name: "nix_upload",
+        sql: include_str!("../migrations/0007_nix_upload.sql"),
+    },
 ];
 
 /// The advisory lock that serializes concurrent migration runs.

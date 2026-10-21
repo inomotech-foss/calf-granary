@@ -19,7 +19,7 @@ use deadpool_postgres::{Client, Pool, PoolError};
 use futures::Stream;
 use serde::{Deserialize, Serialize};
 
-pub(crate) use self::nix::NixPutError;
+pub(crate) use self::nix::{NarCompression, NixPutError};
 use crate::content::{Content, WriteError};
 use crate::nix::SigningKey;
 use crate::store::StoreName;

@@ -1,16 +1,25 @@
 //! Store paths in Nix caches.
 
 use core::error::Error;
+use std::io;
+use std::sync::{Arc, Mutex, PoisonError};
 
+use async_compression::tokio::bufread::{XzDecoder, ZstdDecoder};
+use aws_lc_rs::digest::{self, SHA256};
 use bytes::Bytes;
+use calf_granary_server_db::client::GenericClient;
 use calf_granary_server_db::queries::content::{entry_exists, insert_entry};
-use calf_granary_server_db::queries::nix::{find_nix_path, insert_nix_path, missing_nix_paths};
+use calf_granary_server_db::queries::nix::{
+    find_nix_path, find_nix_upload, insert_nix_path, insert_nix_upload, missing_nix_paths,
+};
 use deadpool_postgres::{Client, Pool, PoolError};
-use futures::Stream;
+use futures::stream::BoxStream;
+use futures::{Stream, StreamExt as _, TryStreamExt as _};
+use tokio_util::io::{ReaderStream, StreamReader};
 
-use super::{Cache, CacheName, Stored};
+use super::{Cache, CacheName, ObjectKey, Stored};
 use crate::content::{Content, WriteError};
-use crate::nix::{InvalidStorePath, PathInfo, StorePath, StorePathHash};
+use crate::nix::{InvalidStorePath, PathInfo, StorePath, StorePathHash, UploadedNarInfo};
 
 /// A store path found in a cache.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -119,21 +128,156 @@ impl Cache {
         if created.is_none() {
             return Ok(Stored::Existing);
         }
-        let references: Vec<String> = info.references.iter().map(StorePath::base_name).collect();
-        insert_nix_path()
+        insert_path(&transaction, &self.name, info).await?;
+        transaction.commit().await?;
+        Ok(Stored::New { size: blob.size })
+    }
+}
+
+/// How a client compressed a NAR file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NarCompression {
+    /// Not at all.
+    None,
+    /// With xz.
+    Xz,
+    /// With zstd.
+    Zstd,
+}
+
+impl NarCompression {
+    /// Detects the compression from the file name, such as `<hash>.nar.xz`.
+    pub(crate) fn of_file(name: &str) -> Option<Self> {
+        match name.rsplit_once(".nar")?.1 {
+            "" => Some(Self::None),
+            ".xz" => Some(Self::Xz),
+            ".zst" => Some(Self::Zstd),
+            _ => None,
+        }
+    }
+}
+
+impl Cache {
+    /// Stores a NAR file that `nix copy` uploads before its narinfo.
+    ///
+    /// The file is decompressed, so its chunks deduplicate with every other
+    /// NAR. Its hash and size are kept to check the narinfo against.
+    pub(crate) async fn put_nar_file<S, E>(
+        &self,
+        content: &Content,
+        pool: &Pool,
+        key: &ObjectKey,
+        compression: NarCompression,
+        body: S,
+    ) -> Result<Stored, NixPutError>
+    where
+        S: Stream<Item = Result<Bytes, E>> + Unpin + Send + 'static,
+        E: Error + Send + Sync + 'static,
+    {
+        let exists = entry_exists()
+            .bind(&pool.get().await?, &self.name.as_ref(), &key.as_ref())
+            .one()
+            .await?;
+        if exists {
+            return Ok(Stored::Existing);
+        }
+        let file = Arc::new(Mutex::new((digest::Context::new(&SHA256), 0u64)));
+        let counted = Arc::clone(&file);
+        let raw = body
+            .inspect_ok(move |bytes| {
+                let mut state = counted.lock().unwrap_or_else(PoisonError::into_inner);
+                state.0.update(bytes);
+                state.1 = state
+                    .1
+                    .saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+            })
+            .map_err(io::Error::other);
+        let reader = StreamReader::new(raw);
+        let plain: BoxStream<'static, io::Result<Bytes>> = match compression {
+            NarCompression::None => ReaderStream::new(reader).boxed(),
+            NarCompression::Xz => {
+                let mut decoder = XzDecoder::new(reader);
+                decoder.multiple_members(true);
+                ReaderStream::new(decoder).boxed()
+            }
+            NarCompression::Zstd => {
+                let mut decoder = ZstdDecoder::new(reader);
+                decoder.multiple_members(true);
+                ReaderStream::new(decoder).boxed()
+            }
+        };
+        let blob = content.write_chunked(pool, &self.store, plain).await?;
+        let (file_hash, file_size) = {
+            let file = file.lock().unwrap_or_else(PoisonError::into_inner);
+            (file.0.clone().finish().as_ref().to_vec(), file.1)
+        };
+        let file_size = i64::try_from(file_size).map_err(|_overflow| NixPutError::TooLarge)?;
+
+        let mut client = pool.get().await?;
+        let transaction = client.transaction().await?;
+        let blob_id = content.commit(&transaction, &blob).await?;
+        let created = insert_entry()
+            .bind(&transaction, &self.name.as_ref(), &key.as_ref(), &blob_id)
+            .opt()
+            .await?;
+        if created.is_none() {
+            return Ok(Stored::Existing);
+        }
+        insert_nix_upload()
             .bind(
                 &transaction,
                 &self.name.as_ref(),
-                &key,
-                &info.store_path.to_string(),
-                &references.as_slice(),
-                &info.deriver.as_ref().map(StorePath::base_name),
-                &info.system.as_deref(),
-                &info.ca.as_deref(),
+                &key.as_ref(),
+                &file_hash.as_slice(),
+                &file_size,
             )
             .await?;
         transaction.commit().await?;
         Ok(Stored::New { size: blob.size })
+    }
+
+    /// Records the store path of a narinfo that `nix copy` uploads after its
+    /// NAR file.
+    ///
+    /// The NAR file must match the narinfo's hashes and sizes.
+    pub(crate) async fn put_narinfo(
+        &self,
+        pool: &Pool,
+        info: &UploadedNarInfo,
+    ) -> Result<Stored, NixPutError> {
+        let mut client = pool.get().await?;
+        let transaction = client.transaction().await?;
+        let upload = find_nix_upload()
+            .bind(&transaction, &self.name.as_ref(), &info.url.as_str())
+            .opt()
+            .await?
+            .ok_or(NixPutError::MissingNar)?;
+        let path = &info.path;
+        let matches = upload.hash == path.nar_hash
+            && u64::try_from(upload.size).ok() == Some(path.nar_size)
+            && info
+                .file_hash
+                .as_ref()
+                .is_none_or(|hash| *hash == upload.file_hash)
+            && info
+                .file_size
+                .is_none_or(|size| u64::try_from(upload.file_size).ok() == Some(size));
+        if !matches {
+            return Err(NixPutError::Mismatch);
+        }
+        let key = path.store_path.hash().as_ref();
+        let created = insert_entry()
+            .bind(&transaction, &self.name.as_ref(), &key, &upload.blob_id)
+            .opt()
+            .await?;
+        if created.is_none() {
+            return Ok(Stored::Existing);
+        }
+        insert_path(&transaction, &self.name, path).await?;
+        transaction.commit().await?;
+        Ok(Stored::New {
+            size: path.nar_size,
+        })
     }
 }
 
@@ -160,7 +304,38 @@ pub(crate) enum NixPutError {
     /// The NAR doesn't match the claimed hash or size.
     #[error("the NAR doesn't match its hash and size")]
     Mismatch,
+    /// A narinfo names a NAR file that wasn't uploaded.
+    #[error("the narinfo names a NAR file that wasn't uploaded")]
+    MissingNar,
+    /// The NAR file is larger than Postgres can count.
+    #[error("the NAR file is too large")]
+    TooLarge,
     /// Storing the NAR failed.
     #[error(transparent)]
     Write(#[from] WriteError),
+}
+
+/// Records the metadata of a store path whose entry exists.
+async fn insert_path<C>(
+    client: &C,
+    cache: &CacheName,
+    path: &PathInfo,
+) -> Result<(), tokio_postgres::Error>
+where
+    C: GenericClient + Sync,
+{
+    let references: Vec<String> = path.references.iter().map(StorePath::base_name).collect();
+    insert_nix_path()
+        .bind(
+            client,
+            &cache.as_ref(),
+            &path.store_path.hash().as_ref(),
+            &path.store_path.to_string(),
+            &references.as_slice(),
+            &path.deriver.as_ref().map(StorePath::base_name),
+            &path.system.as_deref(),
+            &path.ca.as_deref(),
+        )
+        .await
+        .map(drop)
 }

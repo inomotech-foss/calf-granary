@@ -16,7 +16,7 @@ use axum::routing::{get, post, put};
 use deadpool_postgres::{Client, Pool};
 
 use self::metrics::{Lookup, ObjectMetrics, Upload};
-use super::bearer;
+use super::credential;
 use crate::access::{AccessLog, Accessed};
 use crate::cache::{Caches, Hit, ObjectKey, Protocol, PutError, Stored};
 use crate::content::{Content, Encoding, WriteError};
@@ -42,14 +42,9 @@ struct Objects {
 
 impl Objects {
     /// Looks up an entry and records the read.
-    async fn fetch(
-        &self,
-        client: &Client,
-        Path((cache, key)): &Path<(String, String)>,
-    ) -> Result<Hit, StatusCode> {
+    async fn fetch(&self, client: &Client, cache: &str, key: &str) -> Result<Hit, StatusCode> {
         let found = self.caches.get(cache).ok_or(StatusCode::NOT_FOUND)?;
-        let object =
-            ObjectKey::try_from(key.as_str()).map_err(|_invalid| StatusCode::BAD_REQUEST)?;
+        let object = ObjectKey::try_from(key).map_err(|_invalid| StatusCode::BAD_REQUEST)?;
         match found.get(client, &object).await {
             Ok(Some(hit)) => {
                 let lookup = if hit.fallback {
@@ -84,8 +79,8 @@ impl Objects {
     /// Checks that the request carries a granary token that grants the
     /// cache.
     fn authorize(&self, headers: &HeaderMap, cache: &str) -> Result<Grant, StatusCode> {
-        let token = bearer(headers).ok_or(StatusCode::UNAUTHORIZED)?;
-        let grant = self.key.verify(token).map_err(|err| {
+        let token = credential(headers).ok_or(StatusCode::UNAUTHORIZED)?;
+        let grant = self.key.verify(&token).map_err(|err| {
             tracing::info!(error = &err as &dyn Error, "rejected a write token");
             StatusCode::UNAUTHORIZED
         })?;
@@ -144,14 +139,33 @@ async fn get_object(State(state): State<Objects>, path: Path<(String, String)>) 
     {
         return nix::get(&state, found, settings, key, false).await;
     }
+    serve_file(&state, cache, key, false).await
+}
+
+/// Returns the headers of an object, from the fallback cache if needed.
+async fn head_object(State(state): State<Objects>, path: Path<(String, String)>) -> Response {
+    let Path((cache, key)) = &path;
+    if let Some(found) = state.caches.get(cache)
+        && let Protocol::Nix(settings) = found.protocol()
+    {
+        return nix::get(&state, found, settings, key, true).await;
+    }
+    serve_file(&state, cache, key, true).await
+}
+
+/// Serves the plain content of an entry, from the fallback cache if needed.
+async fn serve_file(state: &Objects, cache: &str, key: &str, head: bool) -> Response {
     let client = match state.client().await {
         Ok(client) => client,
         Err(status) => return status.into_response(),
     };
-    let hit = match state.fetch(&client, &path).await {
+    let hit = match state.fetch(&client, cache, key).await {
         Ok(hit) => hit,
         Err(status) => return status.into_response(),
     };
+    if head {
+        return object_headers(&hit).into_response();
+    }
     match state
         .content
         .read(&client, hit.blob_id, Encoding::Plain)
@@ -165,24 +179,6 @@ async fn get_object(State(state): State<Objects>, path: Path<(String, String)>) 
             tracing::error!(error = &err as &dyn Error, "failed to read an object");
             StatusCode::BAD_GATEWAY.into_response()
         }
-    }
-}
-
-/// Returns the headers of an object, from the fallback cache if needed.
-async fn head_object(State(state): State<Objects>, path: Path<(String, String)>) -> Response {
-    let Path((cache, key)) = &path;
-    if let Some(found) = state.caches.get(cache)
-        && let Protocol::Nix(settings) = found.protocol()
-    {
-        return nix::get(&state, found, settings, key, true).await;
-    }
-    let client = match state.client().await {
-        Ok(client) => client,
-        Err(status) => return status.into_response(),
-    };
-    match state.fetch(&client, &path).await {
-        Ok(hit) => object_headers(&hit).into_response(),
-        Err(status) => status.into_response(),
     }
 }
 
@@ -203,8 +199,8 @@ async fn put_object(
     let Some(found) = state.caches.get(&cache) else {
         return StatusCode::NOT_FOUND;
     };
-    if !matches!(found.protocol(), Protocol::Files) {
-        return StatusCode::METHOD_NOT_ALLOWED;
+    if let Protocol::Nix(_) = found.protocol() {
+        return nix::put(&state, found, &key, body).await;
     }
     let Ok(object) = ObjectKey::try_from(key.as_str()) else {
         return StatusCode::BAD_REQUEST;

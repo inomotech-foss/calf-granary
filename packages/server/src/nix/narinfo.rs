@@ -1,7 +1,9 @@
 //! Narinfo files, which describe one store path.
 
+use std::collections::HashMap;
+
 use super::base32;
-use super::path_info::PathInfo;
+use super::path_info::{PathInfo, parse_sha256};
 use super::signing::SigningKey;
 use super::store_path::StorePath;
 
@@ -66,6 +68,64 @@ impl NarInfo {
         }
         lines.push(String::new());
         lines.join("\n")
+    }
+}
+
+/// A narinfo that a client uploads with `nix copy`.
+///
+/// Signatures are ignored, because the cache signs with its own key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct UploadedNarInfo {
+    /// The store path's metadata.
+    pub(crate) path: PathInfo,
+    /// Where the client uploaded the compressed NAR, relative to the cache.
+    pub(crate) url: String,
+    /// The SHA-256 of the compressed NAR file.
+    pub(crate) file_hash: Option<Vec<u8>>,
+    /// The size of the compressed NAR file.
+    pub(crate) file_size: Option<u64>,
+}
+
+impl UploadedNarInfo {
+    /// Parses the text of a narinfo.
+    pub(crate) fn parse(text: &str) -> Option<Self> {
+        let mut fields = HashMap::new();
+        for line in text.lines().filter(|line| !line.is_empty()) {
+            let (name, value) = line.split_once(": ")?;
+            fields.insert(name, value);
+        }
+        let parse_path = |base_name: &str| StorePath::from_base_name(base_name).ok();
+        let references = match fields.get("References").copied().unwrap_or_default() {
+            "" => Vec::new(),
+            references => references
+                .split(' ')
+                .map(parse_path)
+                .collect::<Option<_>>()?,
+        };
+        let deriver = match fields.get("Deriver").copied() {
+            None | Some("unknown-deriver") => None,
+            Some(deriver) => Some(parse_path(deriver)?),
+        };
+        Some(Self {
+            path: PathInfo {
+                store_path: StorePath::try_from(*fields.get("StorePath")?).ok()?,
+                references,
+                deriver,
+                system: fields.get("System").map(ToString::to_string),
+                ca: fields.get("CA").map(ToString::to_string),
+                nar_hash: parse_sha256(fields.get("NarHash")?)?,
+                nar_size: fields.get("NarSize")?.parse().ok()?,
+            },
+            url: (*fields.get("URL")?).to_owned(),
+            file_hash: match fields.get("FileHash") {
+                Some(hash) => Some(parse_sha256(hash)?),
+                None => None,
+            },
+            file_size: match fields.get("FileSize") {
+                Some(size) => Some(size.parse().ok()?),
+                None => None,
+            },
+        })
     }
 }
 
@@ -140,6 +200,30 @@ mod tests {
                  1mdqa9w1p6cmli6976v4wi0sw9r4p5pr-glibc-2.40\n"
             ),
             "references are base names"
+        );
+    }
+
+    #[test]
+    fn parses_uploaded_narinfos() {
+        let text =
+            "StorePath: /nix/store/0mdqa9w1p6cmli6976v4wi0sw9r4p5pr-hello-2.12\nURL: \
+             nar/1b9p07z77phvv2hf6gm9f28syp39f1ag8jkh6s5rnx7wzpvvf7d6.nar.xz\nCompression: \
+             xz\nFileHash: sha256:1b9p07z77phvv2hf6gm9f28syp39f1ag8jkh6s5rnx7wzpvvf7d6\nFileSize: \
+             50\nNarHash: sha256:0mdqa9w1p6cmli6976v4wi0sw9r4p5prkj7lzfd1877wk11c9c73\nNarSize: \
+             120\nReferences: 0mdqa9w1p6cmli6976v4wi0sw9r4p5pr-hello-2.12\nDeriver: \
+             unknown-deriver\nSig: other-1:AAAA\n";
+        let info = UploadedNarInfo::parse(text).unwrap();
+        assert_eq!(
+            info.url, "nar/1b9p07z77phvv2hf6gm9f28syp39f1ag8jkh6s5rnx7wzpvvf7d6.nar.xz",
+            "the upload location"
+        );
+        assert_eq!(info.file_size, Some(50), "the file size");
+        assert_eq!(info.path.nar_size, 120, "the NAR size");
+        assert_eq!(info.path.references.len(), 1, "the references");
+        assert_eq!(info.path.deriver, None, "an unknown deriver");
+        assert!(
+            UploadedNarInfo::parse("StorePath: /nix/store/x\n").is_none(),
+            "required fields"
         );
     }
 }

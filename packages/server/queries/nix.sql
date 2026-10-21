@@ -38,3 +38,15 @@ WHERE NOT EXISTS (
     SELECT FROM nix_path
     WHERE nix_path.key = requested.hash AND nix_path.cache = any(:caches::text[])
 );
+
+--! insert_nix_upload
+INSERT INTO nix_upload (cache, key, file_hash, file_size)
+VALUES (:cache::text, :key::text, :file_hash::bytea, :file_size::bigint)
+ON CONFLICT (cache, key) DO NOTHING;
+
+--! find_nix_upload
+SELECT entry.blob_id, blob.hash, blob.size, nix_upload.file_hash, nix_upload.file_size
+FROM nix_upload
+JOIN entry USING (cache, key)
+JOIN blob ON blob.id = entry.blob_id
+WHERE nix_upload.cache = :cache::text AND nix_upload.key = :key::text;

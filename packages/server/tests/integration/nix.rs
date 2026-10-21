@@ -234,3 +234,112 @@ async fn serves_uploaded_store_paths() {
     );
     assert!(server.stop().await.success(), "serve stops cleanly");
 }
+
+async fn put_basic(server: &Server, token: &str, path: &str, body: Vec<u8>) -> StatusCode {
+    server
+        .http()
+        .put(server.url(path))
+        .basic_auth("granary", Some(token))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .status()
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres and object storage"]
+async fn accepts_nix_copy_uploads() {
+    let stack = Stack::new(CACHES).await;
+    stack.write("main.key", MAIN_KEY);
+    stack.write("pr.key", PR_KEY);
+    stack.migrate().await;
+    let server = stack.serve().await;
+    let token = stack.token(&["nix-main"]).await;
+    let nar = nar();
+    let file = zstd::encode_all(nar.as_slice(), 3).unwrap();
+    let file_name = format!("nar/{}.nar.zst", "1".repeat(52));
+    let narinfo = |nar_hash: &str| {
+        format!(
+            "StorePath: /nix/store/{HASH}-hello-2.12\nURL: {file_name}\nCompression: \
+             zstd\nFileHash: sha256-{}\nFileSize: {}\nNarHash: {nar_hash}\nNarSize: \
+             {}\nReferences: {OTHER}-glibc-2.40\nDeriver: unknown-deriver\n",
+            STANDARD.encode(digest(&SHA256, &file)),
+            file.len(),
+            nar.len(),
+        )
+    };
+
+    let early = narinfo(&sri(&nar)).into_bytes();
+    assert_eq!(
+        put_basic(&server, &token, &format!("nix-main/{HASH}.narinfo"), early).await,
+        StatusCode::BAD_REQUEST,
+        "a narinfo needs its NAR file first"
+    );
+    assert_eq!(
+        server
+            .http()
+            .head(server.url(&format!("nix-main/{file_name}")))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND,
+        "nix copy sees that the NAR file is missing"
+    );
+    assert_eq!(
+        put_basic(
+            &server,
+            &token,
+            &format!("nix-main/{file_name}"),
+            file.clone()
+        )
+        .await,
+        StatusCode::CREATED,
+        "the NAR file is stored"
+    );
+    assert_eq!(
+        server
+            .http()
+            .head(server.url(&format!("nix-main/{file_name}")))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK,
+        "nix copy sees the NAR file"
+    );
+    let wrong = narinfo(&sri(b"other")).into_bytes();
+    assert_eq!(
+        put_basic(&server, &token, &format!("nix-main/{HASH}.narinfo"), wrong).await,
+        StatusCode::BAD_REQUEST,
+        "the narinfo must match the NAR"
+    );
+    let right = narinfo(&sri(&nar)).into_bytes();
+    assert_eq!(
+        put_basic(&server, &token, &format!("nix-main/{HASH}.narinfo"), right).await,
+        StatusCode::CREATED,
+        "the store path is recorded"
+    );
+
+    let (status, recorded) = text(&server, &format!("nix-main/{HASH}.narinfo")).await;
+    assert_eq!(status, StatusCode::OK, "the narinfo is served");
+    assert_eq!(
+        field(&recorded, "References"),
+        format!("{OTHER}-glibc-2.40"),
+        "the references"
+    );
+    verify(&server, "nix-main", &recorded).await;
+    let response = server
+        .http()
+        .get(server.url(&format!("nix-main/{}", field(&recorded, "URL"))))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        zstd::decode_all(response.bytes().await.unwrap().as_ref()).unwrap(),
+        nar,
+        "the NAR is served"
+    );
+    assert!(server.stop().await.success(), "serve stops cleanly");
+}

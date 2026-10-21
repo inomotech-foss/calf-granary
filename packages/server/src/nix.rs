@@ -6,7 +6,7 @@ mod path_info;
 mod signing;
 mod store_path;
 
-pub(crate) use self::narinfo::NarInfo;
+pub(crate) use self::narinfo::{NarInfo, UploadedNarInfo};
 pub(crate) use self::path_info::{PathInfo, parse_sha256};
 pub(crate) use self::signing::{SigningKey, SigningKeyError};
 pub(crate) use self::store_path::{InvalidStorePath, StorePath, StorePathHash};

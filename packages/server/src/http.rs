@@ -10,6 +10,8 @@ use std::sync::Arc;
 use axum::http::HeaderMap;
 use axum::http::header::AUTHORIZATION;
 use axum::{Router, middleware};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use deadpool_postgres::Pool;
 
 use self::observe::RequestMetrics;
@@ -46,4 +48,21 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
     scheme
         .eq_ignore_ascii_case("bearer")
         .then_some(token.trim())
+}
+
+/// Returns the granary token from the `Authorization` header.
+///
+/// Besides bearer tokens, this accepts the token as the password of basic
+/// authentication, which is what Nix sends from a netrc file.
+fn credential(headers: &HeaderMap) -> Option<String> {
+    if let Some(token) = bearer(headers) {
+        return Some(token.to_owned());
+    }
+    let (scheme, encoded) = headers.get(AUTHORIZATION)?.to_str().ok()?.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("basic") {
+        return None;
+    }
+    let decoded = String::from_utf8(STANDARD.decode(encoded.trim()).ok()?).ok()?;
+    let (_, password) = decoded.split_once(':')?;
+    Some(password.to_owned())
 }

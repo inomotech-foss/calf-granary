@@ -14,6 +14,19 @@ let
       retention = "7d";
       fallback = "main";
     };
+    nix-main = {
+      store = "long";
+      retention = "30d";
+      protocol = "nix";
+      signing_key = "@dev@/nix-main.key";
+    };
+    nix-pr = {
+      store = "short";
+      retention = "7d";
+      protocol = "nix";
+      signing_key = "@dev@/nix-pr.key";
+      fallback = "nix-main";
+    };
   };
   buckets = lib.mapAttrsToList (_: store: store.bucket) stores ++ [ "granary-test" ];
 in
@@ -102,6 +115,8 @@ in
         runtimeInputs = [
           pkgs.coreutils
           pkgs.git
+          pkgs.gnused
+          pkgs.nix
           pkgs.process-compose
         ];
         text = ''
@@ -114,8 +129,17 @@ in
             od -An -tx1 -N32 /dev/urandom | tr -d ' \n' >"$secret"
           fi
 
+          for cache in nix-main nix-pr; do
+            key="$GRANARY_DEV_DIR/$cache.key"
+            if [ ! -f "$key" ]; then
+              nix --extra-experimental-features nix-command key generate-secret \
+                --key-name "granary-dev-$cache-1" >"$key"
+            fi
+          done
+          sed "s|@dev@|$GRANARY_DEV_DIR|g" ${granaryConfig} >"$GRANARY_DEV_DIR/config.toml"
+
           cat >"$GRANARY_DEV_DIR/env" <<EOF
-          export GRANARY_CONFIG=${granaryConfig}
+          export GRANARY_CONFIG=$GRANARY_DEV_DIR/config.toml
           export GRANARY_DATABASE_URL="host=127.0.0.1 port=15432 user=postgres dbname=postgres sslmode=require"
           export GRANARY_DATABASE_CA=$GRANARY_DEV_DIR/tls/ca.crt
           export GRANARY_LISTEN=127.0.0.1:18080

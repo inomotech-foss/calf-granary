@@ -1,9 +1,10 @@
 //! The Nix binary cache protocol over HTTP.
 
 use core::error::Error;
+use core::str;
 
 use axum::Json;
-use axum::body::Body;
+use axum::body::{Body, to_bytes};
 use axum::extract::{Path, State};
 use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
@@ -13,12 +14,17 @@ use serde::{Deserialize, Serialize};
 use super::Objects;
 use super::metrics::{Lookup, Upload};
 use crate::access::Accessed;
-use crate::cache::{Cache, NixCache, NixPutError, ObjectKey, Protocol, Stored};
+use crate::cache::{Cache, NarCompression, NixCache, NixPutError, ObjectKey, Protocol, Stored};
 use crate::content::{Encoding, WriteError};
-use crate::nix::{NarInfo, PathInfo, STORE_DIR, StorePath, StorePathHash, parse_sha256};
+use crate::nix::{
+    NarInfo, PathInfo, STORE_DIR, StorePath, StorePathHash, UploadedNarInfo, parse_sha256,
+};
 
 /// The header that carries the metadata of an uploaded NAR as JSON.
 const NAR_INFO_HEADER: &str = "x-granary-nar-info";
+
+/// The largest narinfo that `nix copy` may upload.
+const MAX_NARINFO_SIZE: usize = 1024 * 1024;
 
 /// The most hashes one missing-paths request may ask about.
 const MAX_HASHES: usize = 10_000;
@@ -102,10 +108,11 @@ pub(super) async fn get(
     if let Some(hash) = key
         .strip_prefix("nar/")
         .and_then(|file| file.strip_suffix(".nar.zst"))
+        .filter(|hash| StorePathHash::try_from(*hash).is_ok())
     {
         return nar(state, cache, hash, head).await;
     }
-    StatusCode::NOT_FOUND.into_response()
+    super::serve_file(state, cache.name().as_ref(), key, head).await
 }
 
 /// Serves the signed narinfo of a store path.
@@ -197,6 +204,104 @@ async fn nar(state: &Objects, cache: &Cache, hash: &str, head: bool) -> Response
         Err(err) => {
             tracing::error!(error = &err as &dyn Error, "failed to read a NAR");
             StatusCode::BAD_GATEWAY.into_response()
+        }
+    }
+}
+
+/// Answers an upload from `nix copy` to a Nix cache.
+///
+/// NAR files come first and narinfos after them. Other files, such as build
+/// logs, are kept as they are. The caller checked the token.
+pub(super) async fn put(state: &Objects, cache: &Cache, key: &str, body: Body) -> StatusCode {
+    let name = cache.name().as_ref();
+    let stored = if key == "nix-cache-info" {
+        return StatusCode::NO_CONTENT;
+    } else if key.ends_with(".narinfo") {
+        let Ok(text) = to_bytes(body, MAX_NARINFO_SIZE).await else {
+            return StatusCode::PAYLOAD_TOO_LARGE;
+        };
+        let Some(info) = str::from_utf8(&text).ok().and_then(UploadedNarInfo::parse) else {
+            return StatusCode::BAD_REQUEST;
+        };
+        if key.strip_suffix(".narinfo") != Some(info.path.store_path.hash().as_ref()) {
+            return StatusCode::BAD_REQUEST;
+        }
+        cache.put_narinfo(&state.pool, &info).await
+    } else {
+        let Ok(object) = ObjectKey::try_from(key) else {
+            return StatusCode::BAD_REQUEST;
+        };
+        match key.strip_prefix("nar/").map(NarCompression::of_file) {
+            Some(Some(compression)) => {
+                cache
+                    .put_nar_file(
+                        &state.content,
+                        &state.pool,
+                        &object,
+                        compression,
+                        body.into_data_stream(),
+                    )
+                    .await
+            }
+            Some(None) => return StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            None => {
+                return match cache
+                    .put(
+                        &state.content,
+                        &state.pool,
+                        &object,
+                        body.into_data_stream(),
+                    )
+                    .await
+                {
+                    Ok(Stored::New { size: _ }) => StatusCode::CREATED,
+                    Ok(Stored::Existing) => StatusCode::NO_CONTENT,
+                    Err(err) => {
+                        tracing::error!(
+                            error = &err as &dyn Error,
+                            cache = name,
+                            key,
+                            "failed to store a file"
+                        );
+                        StatusCode::BAD_GATEWAY
+                    }
+                };
+            }
+        }
+    };
+    match stored {
+        Ok(Stored::New { size }) => {
+            state.metrics.upload(name, Upload::Stored);
+            state.metrics.stored(name, size);
+            StatusCode::CREATED
+        }
+        Ok(Stored::Existing) => {
+            state.metrics.upload(name, Upload::Existing);
+            StatusCode::NO_CONTENT
+        }
+        Err(
+            err @ (NixPutError::Mismatch
+            | NixPutError::MissingNar
+            | NixPutError::Write(WriteError::Body(_))),
+        ) => {
+            state.metrics.upload(name, Upload::Aborted);
+            tracing::info!(
+                error = &err as &dyn Error,
+                cache = name,
+                key,
+                "rejected an upload"
+            );
+            StatusCode::BAD_REQUEST
+        }
+        Err(err) => {
+            state.metrics.upload(name, Upload::Error);
+            tracing::error!(
+                error = &err as &dyn Error,
+                cache = name,
+                key,
+                "failed to store an upload"
+            );
+            StatusCode::BAD_GATEWAY
         }
     }
 }
