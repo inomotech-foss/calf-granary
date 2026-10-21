@@ -1,5 +1,7 @@
 //! Caches and the objects in them.
 
+mod upload;
+
 use core::borrow::Borrow;
 use core::error::Error;
 use core::fmt;
@@ -13,6 +15,8 @@ use object_store::{
     GetOptions, GetResult, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, WriteMultipart,
 };
 use serde::{Deserialize, Serialize};
+
+use self::upload::Upload;
 
 /// The size of the parts of multipart uploads. Smaller objects are uploaded
 /// in one request.
@@ -191,7 +195,8 @@ impl Cache {
     /// Stores an object unless this cache already has it.
     ///
     /// Returns whether the object was stored. Objects that fit in one part
-    /// are uploaded in one request, larger ones in parts.
+    /// are uploaded in one request, larger ones in parts. An unfinished
+    /// multipart upload is aborted.
     pub(crate) async fn put<S, E>(&self, key: &ObjectKey, mut body: S) -> Result<bool, PutError>
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin + Send,
@@ -226,25 +231,21 @@ impl Cache {
             .put_multipart_opts(&key.0, PutMultipartOptions::default())
             .await
             .map_err(PutError::Store)?;
-        let mut writer = WriteMultipart::new_with_chunk_size(upload, PART_SIZE);
+        let mut upload = Upload::new(WriteMultipart::new_with_chunk_size(upload, PART_SIZE));
         for part in parts {
-            writer.put(part);
+            upload
+                .put(part, PART_CONCURRENCY)
+                .await
+                .map_err(PutError::Store)?;
         }
         while let Some(chunk) = body.next().await {
-            let chunk = match chunk {
-                Ok(chunk) => chunk,
-                Err(source) => {
-                    writer.abort().await.map_err(PutError::Store)?;
-                    return Err(PutError::Body(Box::new(source)));
-                }
-            };
-            if let Err(err) = writer.wait_for_capacity(PART_CONCURRENCY).await {
-                writer.abort().await.map_err(PutError::Store)?;
-                return Err(PutError::Store(err));
-            }
-            writer.put(chunk);
+            let chunk = chunk.map_err(|source| PutError::Body(Box::new(source)))?;
+            upload
+                .put(chunk, PART_CONCURRENCY)
+                .await
+                .map_err(PutError::Store)?;
         }
-        writer.finish().await.map_err(PutError::Store)?;
+        upload.finish().await.map_err(PutError::Store)?;
         Ok(true)
     }
 
