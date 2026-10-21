@@ -64,9 +64,9 @@ impl Accesses {
     }
 
     /// Notes that objects were written.
-    fn written(&mut self, objects: &[Accessed], now: Instant) {
+    fn written(&mut self, objects: Vec<Accessed>, now: Instant) {
         for object in objects {
-            self.written.insert(object.clone(), now);
+            self.written.insert(object, now);
         }
     }
 
@@ -113,7 +113,7 @@ impl AccessLog {
         match write(pool, &objects).await {
             Ok(()) => {
                 tracing::debug!(count = objects.len(), "recorded object reads");
-                self.lock().written(&objects, now);
+                self.lock().written(objects, now);
             }
             Err(err) => {
                 tracing::error!(error = &err as &dyn Error, "failed to record object reads");
@@ -165,7 +165,7 @@ mod tests {
     fn object(key: &str) -> Accessed {
         Accessed {
             cache: CacheName::try_from("main".to_owned()).unwrap(),
-            key: ObjectKey::try_from(key).unwrap(),
+            key: ObjectKey::try_from(key.to_owned()).unwrap(),
         }
     }
 
@@ -183,7 +183,7 @@ mod tests {
     fn recent_writes_are_skipped() {
         let now = Instant::now();
         let mut accesses = Accesses::default();
-        accesses.written(&[object("a")], now);
+        accesses.written(vec![object("a")], now);
         accesses.record(object("a"), now + RECORD_INTERVAL / 2);
         assert!(
             accesses.take(now + RECORD_INTERVAL / 2).is_empty(),

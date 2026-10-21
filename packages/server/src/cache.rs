@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize, Serializer};
 pub(crate) use self::hashserv::{HashservError, Report, StoredReport};
 pub(crate) use self::nix::{NarCompression, NixPutError};
 use crate::content::{Content, WriteError};
-use crate::nix::{STORE_DIR, SigningKey};
+use crate::nix::{STORE_DIR, SigningKey, StorePathHash};
 use crate::sha256::{InvalidSha256, Sha256};
 use crate::store::StoreName;
 
@@ -110,21 +110,25 @@ impl AsRef<str> for ObjectKey {
     }
 }
 
-impl TryFrom<&str> for ObjectKey {
+impl TryFrom<String> for ObjectKey {
     type Error = InvalidObjectKey;
 
-    fn try_from(key: &str) -> Result<Self, Self::Error> {
+    fn try_from(key: String) -> Result<Self, Self::Error> {
         let valid = !key.is_empty()
             && key
                 .split('/')
                 .all(|segment| !matches!(segment, "" | "." | ".."));
         if valid {
-            Ok(Self(key.to_owned()))
+            Ok(Self(key))
         } else {
-            Err(InvalidObjectKey {
-                key: key.to_owned(),
-            })
+            Err(InvalidObjectKey { key })
         }
+    }
+}
+
+impl From<&StorePathHash> for ObjectKey {
+    fn from(hash: &StorePathHash) -> Self {
+        Self(hash.as_str().to_owned())
     }
 }
 
@@ -511,14 +515,15 @@ mod tests {
     fn object_keys() {
         let key = ObjectKey::try_from(
             "universal/ab/cd/sstate:zlib:core2-64-poky-linux:1.3:r0:core2-64:11:\
-             abcd_populate_sysroot.tar.zst",
+             abcd_populate_sysroot.tar.zst"
+                .to_owned(),
         )
         .unwrap();
         assert_eq!(key.as_ref().split('/').count(), 4, "segments are kept");
 
         for invalid in ["", "/a", "a/", "a//b", "a/./b", "a/../b", ".."] {
             assert!(
-                ObjectKey::try_from(invalid).is_err(),
+                ObjectKey::try_from(invalid.to_owned()).is_err(),
                 "{invalid} is invalid"
             );
         }

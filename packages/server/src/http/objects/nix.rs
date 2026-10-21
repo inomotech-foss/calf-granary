@@ -110,9 +110,9 @@ pub(super) async fn get(
     if let Some(hash) = key
         .strip_prefix("nar/")
         .and_then(|file| file.strip_suffix(".nar.zst"))
-        .filter(|hash| StorePathHash::try_from(*hash).is_ok())
+        .and_then(|hash| StorePathHash::try_from(hash).ok())
     {
-        return nar(state, cache, hash, head).await;
+        return nar(state, cache, &hash, head).await;
     }
     if let Some(compression) = key.strip_prefix("nar/").and_then(NarCompression::of_file) {
         return nar_file(state, cache, key, compression, head).await;
@@ -131,7 +131,7 @@ async fn nar_file(
     compression: NarCompression,
     head: bool,
 ) -> Response {
-    let Ok(object) = ObjectKey::try_from(key) else {
+    let Ok(object) = ObjectKey::try_from(key.to_owned()) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let client = match state.client().await {
@@ -178,7 +178,7 @@ async fn narinfo(
     hash: &str,
     head: bool,
 ) -> Response {
-    let (Ok(hash), Ok(key)) = (StorePathHash::try_from(hash), ObjectKey::try_from(hash)) else {
+    let Ok(hash) = StorePathHash::try_from(hash) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let client = match state.client().await {
@@ -196,7 +196,7 @@ async fn narinfo(
             state.metrics.lookup(name, lookup);
             state.access.record(Accessed {
                 cache: hit.cache.clone(),
-                key,
+                key: ObjectKey::from(&hash),
             });
             let mut text = String::with_capacity(NARINFO_CAPACITY);
             let info = NarInfo {
@@ -225,10 +225,8 @@ async fn narinfo(
 }
 
 /// Streams the NAR of a store path as zstd frames.
-async fn nar(state: &Objects, cache: &Cache, hash: &str, head: bool) -> Response {
-    let Ok(key) = ObjectKey::try_from(hash) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
+async fn nar(state: &Objects, cache: &Cache, hash: &StorePathHash, head: bool) -> Response {
+    let key = ObjectKey::from(hash);
     let client = match state.client().await {
         Ok(client) => client,
         Err(status) => return status.into_response(),
@@ -299,7 +297,7 @@ pub(super) async fn put(state: &Objects, cache: &Cache, key: &str, body: Body) -
         }
         cache.put_narinfo(&state.pool, &info).await
     } else {
-        let Ok(object) = ObjectKey::try_from(key) else {
+        let Ok(object) = ObjectKey::try_from(key.to_owned()) else {
             return StatusCode::BAD_REQUEST;
         };
         match key.strip_prefix("nar/").map(NarCompression::of_file) {
@@ -404,13 +402,13 @@ pub(super) async fn upload(
     let Some(info) = info else {
         return StatusCode::BAD_REQUEST;
     };
-    let path = info.store_path.to_string();
+    let path = &info.store_path;
     match found
         .put_nix_path(&state.content, &state.pool, &info, body.into_data_stream())
         .await
     {
         Ok(Stored::New { size }) => {
-            tracing::debug!(sub = grant.sub, cache, path, size, "stored a store path");
+            tracing::debug!(sub = grant.sub, cache, %path, size, "stored a store path");
             state.metrics.upload(found.name(), Upload::Stored);
             state.metrics.stored(found.name(), size);
             StatusCode::CREATED
@@ -421,7 +419,7 @@ pub(super) async fn upload(
         }
         Err(err @ (NixPutError::Mismatch | NixPutError::Write(WriteError::Body(_)))) => {
             state.metrics.upload(found.name(), Upload::Aborted);
-            tracing::info!(error = &err as &dyn Error, cache, path, "rejected a NAR");
+            tracing::info!(error = &err as &dyn Error, cache, %path, "rejected a NAR");
             StatusCode::BAD_REQUEST
         }
         Err(err) => {
@@ -429,7 +427,7 @@ pub(super) async fn upload(
             tracing::error!(
                 error = &err as &dyn Error,
                 cache,
-                path,
+                %path,
                 "failed to store a store path"
             );
             StatusCode::BAD_GATEWAY

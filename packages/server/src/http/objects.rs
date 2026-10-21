@@ -66,7 +66,8 @@ impl Objects {
     /// Looks up an entry and records the read.
     async fn fetch(&self, client: &Client, found: &Cache, key: &str) -> Result<Hit, StatusCode> {
         let cache = found.name();
-        let object = ObjectKey::try_from(key).map_err(|_invalid| StatusCode::BAD_REQUEST)?;
+        let object =
+            ObjectKey::try_from(key.to_owned()).map_err(|_invalid| StatusCode::BAD_REQUEST)?;
         match found.get(client, &object).await {
             Ok(Some(hit)) => {
                 let lookup = if hit.fallback {
@@ -231,7 +232,7 @@ async fn put_object(
         Protocol::Nix(_) => return nix::put(&state, found, &key, body).await,
         Protocol::Hashserv => return StatusCode::METHOD_NOT_ALLOWED,
     }
-    let Ok(object) = ObjectKey::try_from(key.as_str()) else {
+    let Ok(object) = ObjectKey::try_from(key) else {
         return StatusCode::BAD_REQUEST;
     };
     match found
@@ -244,7 +245,13 @@ async fn put_object(
         .await
     {
         Ok(Stored::New { size }) => {
-            tracing::debug!(sub = grant.sub, cache, key, size, "stored an object");
+            tracing::debug!(
+                sub = grant.sub,
+                cache,
+                key = object.as_ref(),
+                size,
+                "stored an object"
+            );
             state.metrics.upload(found.name(), Upload::Stored);
             state.metrics.stored(found.name(), size);
             StatusCode::CREATED
@@ -255,7 +262,12 @@ async fn put_object(
         }
         Err(err @ PutError::Write(WriteError::Body(_))) => {
             state.metrics.upload(found.name(), Upload::Aborted);
-            tracing::info!(error = &err as &dyn Error, cache, key, "upload aborted");
+            tracing::info!(
+                error = &err as &dyn Error,
+                cache,
+                key = object.as_ref(),
+                "upload aborted"
+            );
             StatusCode::BAD_REQUEST
         }
         Err(err) => {
@@ -263,7 +275,7 @@ async fn put_object(
             tracing::error!(
                 error = &err as &dyn Error,
                 cache,
-                key,
+                key = object.as_ref(),
                 "failed to store an object"
             );
             StatusCode::BAD_GATEWAY
@@ -288,8 +300,8 @@ async fn missing(
     }
     let Ok(keys) = request
         .keys
-        .iter()
-        .map(|key| ObjectKey::try_from(key.as_str()))
+        .into_iter()
+        .map(ObjectKey::try_from)
         .collect::<Result<Vec<_>, _>>()
     else {
         return StatusCode::BAD_REQUEST.into_response();
