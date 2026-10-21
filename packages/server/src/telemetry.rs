@@ -1,7 +1,8 @@
 //! Logs on stdout and traces, metrics and logs over OTLP.
 
 use core::error::Error;
-use std::{env, io};
+use std::env;
+use std::io::{self, IsTerminal as _};
 
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::{KeyValue, global};
@@ -113,7 +114,7 @@ impl Telemetry {
         });
         tracing_subscriber::registry()
             .with(filter())
-            .with(fmt::layer())
+            .with(fmt::layer().with_ansi(io::stdout().is_terminal()))
             .with(spans)
             .with(logs.as_ref().map(OpenTelemetryTracingBridge::new))
             .try_init()?;
@@ -130,7 +131,10 @@ impl Telemetry {
     /// Installs a subscriber that only logs to stdout, for when [`Self::init`]
     /// fails.
     pub(crate) fn fallback() {
-        fmt().with_env_filter(filter()).init();
+        fmt()
+            .with_env_filter(filter())
+            .with_ansi(io::stdout().is_terminal())
+            .init();
     }
 
     /// Installs a subscriber that only logs to stderr, for commands whose
@@ -139,6 +143,7 @@ impl Telemetry {
         fmt()
             .with_env_filter(filter())
             .with_writer(io::stderr)
+            .with_ansi(io::stderr().is_terminal())
             .init();
     }
 
