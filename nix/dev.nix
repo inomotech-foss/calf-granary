@@ -36,7 +36,7 @@ in
       seaweedfs = pkgs.writeShellScript "granary-dev-seaweedfs" ''
         mkdir -p "$GRANARY_DEV_DIR/seaweedfs"
         cd "$GRANARY_DEV_DIR/seaweedfs"
-        exec ${services.seaweedfs { port = 18333; }}
+        exec ${services.seaweedfs { port = "18333"; }}
       '';
 
       readiness = probe: {

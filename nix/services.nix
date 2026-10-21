@@ -26,13 +26,15 @@ rec {
     "export AWS_ALLOW_HTTP=true"
   ];
 
+  # weed server keeps gRPC sockets in /tmp, named after the port.
   seaweedfs =
     { port }:
     lib.concatStringsSep " " [
       "${lib.getExe' pkgs.seaweedfs "weed"} server -dir=. -ip=127.0.0.1 -ip.bind=127.0.0.1"
-      "-master.port=${toString (port + 1)} -volume.port=${toString (port + 2)} -volume.max=100"
-      "-filer -filer.port=${toString (port + 3)} -s3 -s3.port=${toString port}"
-      "-s3.config=${s3Config} -s3.port.iceberg=0 -s3.port.lance=0 -master.telemetry=false"
+      "-master.port=$((${port} + 1)) -volume.port=$((${port} + 2)) -volume.max=100"
+      "-filer -filer.port=$((${port} + 3)) -filer.localSocket=filer.sock"
+      "-s3 -s3.port=${port} -s3.localSocket=s3.sock -s3.config=${s3Config}"
+      "-s3.port.iceberg=0 -s3.port.lance=0 -master.telemetry=false"
     ];
 
   createBuckets =
