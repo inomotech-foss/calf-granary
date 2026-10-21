@@ -1,5 +1,6 @@
 //! Background tasks recorded in Postgres.
 
+mod lease;
 mod metrics;
 
 use core::error::Error as _;
@@ -17,6 +18,7 @@ use chrono::Utc;
 use deadpool_postgres::{Client, Pool, PoolError};
 use tracing::Instrument as _;
 
+pub(crate) use self::lease::{LEASE, renewing as renewing_lease};
 use self::metrics::TaskMetrics;
 use crate::cache::{CacheName, Caches, ExpireError};
 use crate::content::{CollectError, CollectStats, Content, Placement, TierError};
@@ -31,6 +33,9 @@ pub(crate) enum TaskKind {
 }
 
 impl TaskKind {
+    /// Every kind that this binary runs.
+    pub(crate) const ALL: [Self; 2] = [Self::Prune, Self::Tier];
+
     /// The name stored in the database.
     pub(crate) const fn name(self) -> &'static str {
         match self {

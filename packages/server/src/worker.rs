@@ -7,20 +7,20 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use calf_granary_server_db::queries::task::{
-    claim_task, complete_task, enqueue_due_schedules, fail_task, next_deadline, release_task,
-    renew_lease,
+    claim_task, complete_task, enqueue_due_schedules, fail_abandoned_tasks, fail_task,
+    next_deadline, release_task,
 };
 use clap::Args;
 use deadpool_postgres::{BuildError, Pool, PoolError};
 use tokio::signal::ctrl_c;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
-use tokio::time::{self, MissedTickBehavior};
+use tokio::time;
 
 use crate::config::{Config, ConfigError};
 use crate::database::{DatabaseArgs, TlsError};
 use crate::migrations::{self, MigrationError};
-use crate::tasks::{Runner, TaskKind, WorkerId};
+use crate::tasks::{LEASE, Runner, TaskKind, WorkerId, renewing_lease};
 
 /// The channel on which Postgres announces pending tasks.
 const TASK_CHANNEL: &str = "task";
@@ -33,12 +33,6 @@ const MIN_IDLE: Duration = Duration::from_secs(1);
 
 /// The longest wait between checks for due tasks.
 const MAX_IDLE: Duration = Duration::from_mins(5);
-
-/// How long a claimed task stays with the worker without a renewal.
-const LEASE: Duration = Duration::from_mins(5);
-
-/// How often a running task's lease is renewed.
-const LEASE_RENEWAL: Duration = Duration::from_mins(1);
 
 /// How often a task is tried before it fails for good.
 const MAX_ATTEMPTS: i32 = 3;
@@ -131,9 +125,17 @@ impl Worker {
         for task in enqueue_due_schedules().bind(&client).all().await? {
             tracing::info!(task = task.id, kind = task.kind, "scheduled a task");
         }
+        for task in fail_abandoned_tasks()
+            .bind(&client, &MAX_ATTEMPTS)
+            .all()
+            .await?
+        {
+            tracing::error!(task, "a task lost its worker too often");
+        }
         let worker = self.id.as_ref();
+        let kinds = TaskKind::ALL.map(TaskKind::name);
         let Some(task) = claim_task()
-            .bind(&client, &worker, &LEASE.as_secs_f64())
+            .bind(&client, &worker, &LEASE.as_secs_f64(), &kinds.as_slice())
             .opt()
             .await?
         else {
@@ -154,23 +156,9 @@ impl Worker {
         );
 
         let run = self.runner.run(task.id, kind);
-        tokio::pin!(run);
-        let mut renewal = time::interval(LEASE_RENEWAL);
-        renewal.reset();
-        renewal.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        let result = loop {
-            tokio::select! {
-                result = &mut run => break Some(result),
-                _ = renewal.tick() => {
-                    if let Err(err) = renew_lease()
-                        .bind(&client, &LEASE.as_secs_f64(), &task.id, &worker)
-                        .await
-                    {
-                        tracing::warn!(error = &err as &dyn Error, task = task.id, "failed to renew a lease");
-                    }
-                }
-                _ = stop.changed() => break None,
-            }
+        let result = tokio::select! {
+            result = renewing_lease(&client, task.id, &self.id, run) => Some(result),
+            _ = stop.changed() => None,
         };
 
         match result {

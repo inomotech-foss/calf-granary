@@ -1,6 +1,13 @@
 --! start_task
-INSERT INTO task (kind, requested_by, state, attempts, worker)
-VALUES (:kind::text, :requested_by::text, 'running', 1, :worker::text)
+INSERT INTO task (kind, requested_by, state, attempts, worker, lease_expires_at)
+VALUES (
+    :kind::text,
+    :requested_by::text,
+    'running',
+    1,
+    :worker::text,
+    now() + make_interval(secs => :lease_seconds::float8)
+)
 RETURNING id;
 
 --! enqueue_due_schedules
@@ -22,13 +29,27 @@ SET state = 'running',
     lease_expires_at = now() + make_interval(secs => :lease_seconds::float8)
 WHERE id = (
     SELECT id FROM task
-    WHERE (state = 'pending' AND due_at <= now())
-        OR (state = 'running' AND lease_expires_at < now())
+    WHERE kind = any(:kinds::text[])
+        AND (
+            (state = 'pending' AND due_at <= now())
+            OR (state = 'running' AND lease_expires_at < now())
+        )
     ORDER BY due_at
     LIMIT 1
     FOR UPDATE SKIP LOCKED
 )
 RETURNING id, kind, attempts;
+
+--! fail_abandoned_tasks
+UPDATE task
+SET state = 'failed',
+    finished_at = now(),
+    lease_expires_at = NULL,
+    failure = 'the lease expired too often'
+WHERE state = 'running'
+    AND lease_expires_at < now()
+    AND attempts >= :max_attempts::integer
+RETURNING id;
 
 --! renew_lease
 UPDATE task

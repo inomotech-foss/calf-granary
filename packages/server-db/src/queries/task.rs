@@ -5,11 +5,17 @@ pub struct StartTaskParams<T1: crate::StringSql, T2: crate::StringSql, T3: crate
     pub kind: T1,
     pub requested_by: T2,
     pub worker: T3,
+    pub lease_seconds: f64,
 }
 #[derive(Debug)]
-pub struct ClaimTaskParams<T1: crate::StringSql> {
+pub struct ClaimTaskParams<
+    T1: crate::StringSql,
+    T2: crate::StringSql,
+    T3: crate::ArraySql<Item = T2>,
+> {
     pub worker: T1,
     pub lease_seconds: f64,
+    pub kinds: T3,
 }
 #[derive(Debug)]
 pub struct RenewLeaseParams<T1: crate::StringSql> {
@@ -338,8 +344,9 @@ where
 pub struct StartTaskStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn start_task() -> StartTaskStmt {
     StartTaskStmt(
-        "INSERT INTO task (kind, requested_by, state, attempts, worker) VALUES ($1::text, \
-         $2::text, 'running', 1, $3::text) RETURNING id",
+        "INSERT INTO task (kind, requested_by, state, attempts, worker, lease_expires_at) VALUES \
+         ( $1::text, $2::text, 'running', 1, $3::text, now() + make_interval(secs => $4::float8) \
+         ) RETURNING id",
         None,
     )
 }
@@ -365,10 +372,11 @@ impl StartTaskStmt {
         kind: &'a T1,
         requested_by: &'a T2,
         worker: &'a T3,
-    ) -> I64Query<'c, 'a, 's, C, i64, 3> {
+        lease_seconds: &'a f64,
+    ) -> I64Query<'c, 'a, 's, C, i64, 4> {
         I64Query {
             client,
-            params: [kind, requested_by, worker],
+            params: [kind, requested_by, worker, lease_seconds],
             query: self.0,
             cached: self.1.as_ref(),
             extractor: |row| Ok(row.try_get(0)?),
@@ -382,7 +390,7 @@ impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql, T2: crate::StringSql, T
         'a,
         's,
         StartTaskParams<T1, T2, T3>,
-        I64Query<'c, 'a, 's, C, i64, 3>,
+        I64Query<'c, 'a, 's, C, i64, 4>,
         C,
     > for StartTaskStmt
 {
@@ -390,8 +398,14 @@ impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql, T2: crate::StringSql, T
         &'s self,
         client: &'c C,
         params: &'a StartTaskParams<T1, T2, T3>,
-    ) -> I64Query<'c, 'a, 's, C, i64, 3> {
-        self.bind(client, &params.kind, &params.requested_by, &params.worker)
+    ) -> I64Query<'c, 'a, 's, C, i64, 4> {
+        self.bind(
+            client,
+            &params.kind,
+            &params.requested_by,
+            &params.worker,
+            &params.lease_seconds,
+        )
     }
 }
 pub struct EnqueueDueSchedulesStmt(&'static str, Option<tokio_postgres::Statement>);
@@ -437,9 +451,9 @@ pub fn claim_task() -> ClaimTaskStmt {
     ClaimTaskStmt(
         "UPDATE task SET state = 'running', attempts = attempts + 1, worker = $1::text, \
          lease_expires_at = now() + make_interval(secs => $2::float8) WHERE id = ( SELECT id FROM \
-         task WHERE (state = 'pending' AND due_at <= now()) OR (state = 'running' AND \
-         lease_expires_at < now()) ORDER BY due_at LIMIT 1 FOR UPDATE SKIP LOCKED ) RETURNING id, \
-         kind, attempts",
+         task WHERE kind = any($3::text[]) AND ( (state = 'pending' AND due_at <= now()) OR \
+         (state = 'running' AND lease_expires_at < now()) ) ORDER BY due_at LIMIT 1 FOR UPDATE \
+         SKIP LOCKED ) RETURNING id, kind, attempts",
         None,
     )
 }
@@ -451,15 +465,24 @@ impl ClaimTaskStmt {
         self.1 = Some(client.prepare(self.0).await?);
         Ok(self)
     }
-    pub fn bind<'c, 'a, 's, C: GenericClient, T1: crate::StringSql>(
+    pub fn bind<
+        'c,
+        'a,
+        's,
+        C: GenericClient,
+        T1: crate::StringSql,
+        T2: crate::StringSql,
+        T3: crate::ArraySql<Item = T2>,
+    >(
         &'s self,
         client: &'c C,
         worker: &'a T1,
         lease_seconds: &'a f64,
-    ) -> ClaimTaskQuery<'c, 'a, 's, C, ClaimTask, 2> {
+        kinds: &'a T3,
+    ) -> ClaimTaskQuery<'c, 'a, 's, C, ClaimTask, 3> {
         ClaimTaskQuery {
             client,
-            params: [worker, lease_seconds],
+            params: [worker, lease_seconds, kinds],
             query: self.0,
             cached: self.1.as_ref(),
             extractor:
@@ -474,22 +497,62 @@ impl ClaimTaskStmt {
         }
     }
 }
-impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql>
+impl<
+    'c,
+    'a,
+    's,
+    C: GenericClient,
+    T1: crate::StringSql,
+    T2: crate::StringSql,
+    T3: crate::ArraySql<Item = T2>,
+>
     crate::client::async_::Params<
         'c,
         'a,
         's,
-        ClaimTaskParams<T1>,
-        ClaimTaskQuery<'c, 'a, 's, C, ClaimTask, 2>,
+        ClaimTaskParams<T1, T2, T3>,
+        ClaimTaskQuery<'c, 'a, 's, C, ClaimTask, 3>,
         C,
     > for ClaimTaskStmt
 {
     fn params(
         &'s self,
         client: &'c C,
-        params: &'a ClaimTaskParams<T1>,
-    ) -> ClaimTaskQuery<'c, 'a, 's, C, ClaimTask, 2> {
-        self.bind(client, &params.worker, &params.lease_seconds)
+        params: &'a ClaimTaskParams<T1, T2, T3>,
+    ) -> ClaimTaskQuery<'c, 'a, 's, C, ClaimTask, 3> {
+        self.bind(client, &params.worker, &params.lease_seconds, &params.kinds)
+    }
+}
+pub struct FailAbandonedTasksStmt(&'static str, Option<tokio_postgres::Statement>);
+pub fn fail_abandoned_tasks() -> FailAbandonedTasksStmt {
+    FailAbandonedTasksStmt(
+        "UPDATE task SET state = 'failed', finished_at = now(), lease_expires_at = NULL, failure \
+         = 'the lease expired too often' WHERE state = 'running' AND lease_expires_at < now() AND \
+         attempts >= $1::integer RETURNING id",
+        None,
+    )
+}
+impl FailAbandonedTasksStmt {
+    pub async fn prepare<'a, C: GenericClient>(
+        mut self,
+        client: &'a C,
+    ) -> Result<Self, tokio_postgres::Error> {
+        self.1 = Some(client.prepare(self.0).await?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient>(
+        &'s self,
+        client: &'c C,
+        max_attempts: &'a i32,
+    ) -> I64Query<'c, 'a, 's, C, i64, 1> {
+        I64Query {
+            client,
+            params: [max_attempts],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |row| Ok(row.try_get(0)?),
+            mapper: |it| it,
+        }
     }
 }
 pub struct RenewLeaseStmt(&'static str, Option<tokio_postgres::Statement>);

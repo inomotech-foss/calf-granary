@@ -11,7 +11,7 @@ use deadpool_postgres::{BuildError, PoolError};
 use crate::config::{Config, ConfigError};
 use crate::database::{DatabaseArgs, TlsError};
 use crate::migrations::{self, MigrationError};
-use crate::tasks::{Runner, TaskError, TaskKind, WorkerId};
+use crate::tasks::{LEASE, Runner, TaskError, TaskKind, WorkerId, renewing_lease};
 
 /// Command-line arguments of the `prune` command.
 #[derive(Debug, Args)]
@@ -36,12 +36,17 @@ impl RunArgs {
 
         let worker = WorkerId::current();
         let id = start_task()
-            .bind(&client, &kind.name(), &"cli", &worker.as_ref())
+            .bind(
+                &client,
+                &kind.name(),
+                &"cli",
+                &worker.as_ref(),
+                &LEASE.as_secs_f64(),
+            )
             .one()
             .await?;
-        let result = Runner::new(pool, Arc::new(caches), Arc::new(content))
-            .run(id, kind)
-            .await;
+        let runner = Runner::new(pool, Arc::new(caches), Arc::new(content));
+        let result = renewing_lease(&client, id, &worker, runner.run(id, kind)).await;
         match result {
             Ok(()) => {
                 complete_task().bind(&client, &id, &worker.as_ref()).await?;

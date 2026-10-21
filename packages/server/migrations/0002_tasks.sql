@@ -8,14 +8,19 @@ CREATE TABLE task (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     kind text NOT NULL REFERENCES task_kind,
     state task_state NOT NULL DEFAULT 'pending',
-    requested_by text NOT NULL,
+    requested_by text NOT NULL CHECK (requested_by <> ''),
     due_at timestamptz NOT NULL DEFAULT now(),
-    attempts integer NOT NULL DEFAULT 0,
+    attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     worker text,
     lease_expires_at timestamptz,
     failure text,
     created_at timestamptz NOT NULL DEFAULT now(),
-    finished_at timestamptz
+    finished_at timestamptz,
+    CHECK (state <> 'running' OR worker IS NOT NULL),
+    CHECK (state = 'running' OR lease_expires_at IS NULL),
+    CHECK ((state IN ('done', 'failed')) = (finished_at IS NOT NULL)),
+    CHECK (state <> 'done' OR failure IS NULL),
+    CHECK (state <> 'failed' OR failure IS NOT NULL)
 );
 
 CREATE INDEX task_due ON task (due_at) WHERE state IN ('pending', 'running');
