@@ -117,7 +117,7 @@ pub(super) async fn get(
     if let Some(compression) = key.strip_prefix("nar/").and_then(NarCompression::of_file) {
         return nar_file(state, cache, key, compression, head).await;
     }
-    super::serve_file(state, cache.name().as_ref(), key, head).await
+    super::serve_file(state, cache, key, head).await
 }
 
 /// Serves a NAR file that `nix copy` uploaded, compressed as its name says.
@@ -185,7 +185,7 @@ async fn narinfo(
         Ok(client) => client,
         Err(status) => return status.into_response(),
     };
-    let name = cache.name().as_ref();
+    let name = cache.name();
     match cache.find_nix_path(&client, &hash).await {
         Ok(Some(hit)) => {
             let lookup = if &hit.cache == cache.name() {
@@ -216,7 +216,7 @@ async fn narinfo(
             state.metrics.lookup(name, Lookup::Error);
             tracing::error!(
                 error = &err as &dyn Error,
-                cache = name,
+                cache = name.as_ref(),
                 "failed to look up a store path"
             );
             StatusCode::SERVICE_UNAVAILABLE.into_response()
@@ -269,7 +269,7 @@ async fn nar(state: &Objects, cache: &Cache, hash: &str, head: bool) -> Response
         .await
     {
         Ok(stream) => {
-            state.metrics.served(cache.name().as_ref(), hit.size);
+            state.metrics.served(cache.name(), hit.size);
             (headers, Body::from_stream(stream)).into_response()
         }
         Err(err) => {
@@ -284,7 +284,7 @@ async fn nar(state: &Objects, cache: &Cache, hash: &str, head: bool) -> Response
 /// NAR files come first and narinfos after them. Other files, such as build
 /// logs, are kept as they are. The caller checked the token.
 pub(super) async fn put(state: &Objects, cache: &Cache, key: &str, body: Body) -> StatusCode {
-    let name = cache.name().as_ref();
+    let name = cache.name();
     let stored = if key == "nix-cache-info" {
         return StatusCode::NO_CONTENT;
     } else if key.ends_with(".narinfo") {
@@ -330,7 +330,7 @@ pub(super) async fn put(state: &Objects, cache: &Cache, key: &str, body: Body) -
                     Err(err) => {
                         tracing::error!(
                             error = &err as &dyn Error,
-                            cache = name,
+                            cache = name.as_ref(),
                             key,
                             "failed to store a file"
                         );
@@ -358,7 +358,7 @@ pub(super) async fn put(state: &Objects, cache: &Cache, key: &str, body: Body) -
             state.metrics.upload(name, Upload::Aborted);
             tracing::info!(
                 error = &err as &dyn Error,
-                cache = name,
+                cache = name.as_ref(),
                 key,
                 "rejected an upload"
             );
@@ -368,7 +368,7 @@ pub(super) async fn put(state: &Objects, cache: &Cache, key: &str, body: Body) -
             state.metrics.upload(name, Upload::Error);
             tracing::error!(
                 error = &err as &dyn Error,
-                cache = name,
+                cache = name.as_ref(),
                 key,
                 "failed to store an upload"
             );
@@ -411,21 +411,21 @@ pub(super) async fn upload(
     {
         Ok(Stored::New { size }) => {
             tracing::debug!(sub = grant.sub, cache, path, size, "stored a store path");
-            state.metrics.upload(&cache, Upload::Stored);
-            state.metrics.stored(&cache, size);
+            state.metrics.upload(found.name(), Upload::Stored);
+            state.metrics.stored(found.name(), size);
             StatusCode::CREATED
         }
         Ok(Stored::Existing) => {
-            state.metrics.upload(&cache, Upload::Existing);
+            state.metrics.upload(found.name(), Upload::Existing);
             StatusCode::NO_CONTENT
         }
         Err(err @ (NixPutError::Mismatch | NixPutError::Write(WriteError::Body(_)))) => {
-            state.metrics.upload(&cache, Upload::Aborted);
+            state.metrics.upload(found.name(), Upload::Aborted);
             tracing::info!(error = &err as &dyn Error, cache, path, "rejected a NAR");
             StatusCode::BAD_REQUEST
         }
         Err(err) => {
-            state.metrics.upload(&cache, Upload::Error);
+            state.metrics.upload(found.name(), Upload::Error);
             tracing::error!(
                 error = &err as &dyn Error,
                 cache,

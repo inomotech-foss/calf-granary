@@ -18,7 +18,7 @@ use calf_granary_server_db::queries::content::{
 use chrono::{DateTime, FixedOffset, TimeDelta, Utc};
 use deadpool_postgres::{Client, Pool, PoolError};
 use futures::Stream;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 pub(crate) use self::hashserv::{HashservError, Report, StoredReport};
 pub(crate) use self::nix::{NarCompression, NixPutError};
@@ -31,9 +31,22 @@ use crate::store::StoreName;
 ///
 /// Names consist of lowercase ASCII letters, digits and dashes and start with
 /// a letter or digit. They appear as the first path segment of object URLs.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(try_from = "String")]
-pub(crate) struct CacheName(String);
+pub(crate) struct CacheName(Arc<str>);
+
+impl CacheName {
+    /// The name as a shared string, such as for metric attributes.
+    pub(crate) fn to_shared(&self) -> Arc<str> {
+        Arc::clone(&self.0)
+    }
+}
+
+impl Serialize for CacheName {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
 
 impl AsRef<str> for CacheName {
     fn as_ref(&self) -> &str {
@@ -70,7 +83,7 @@ impl TryFrom<String> for CacheName {
                 .chars()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
         if valid {
-            Ok(Self(name))
+            Ok(Self(name.into()))
         } else {
             Err(InvalidCacheName { name })
         }

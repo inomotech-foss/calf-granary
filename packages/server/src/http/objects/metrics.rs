@@ -3,6 +3,7 @@
 use opentelemetry::metrics::Counter;
 use opentelemetry::{KeyValue, global};
 
+use crate::cache::CacheName;
 use crate::telemetry::SCOPE;
 
 /// The outcome of looking up an object.
@@ -95,36 +96,36 @@ impl ObjectMetrics {
     }
 
     /// Records the outcome of a lookup.
-    pub(super) fn lookup(&self, cache: &str, lookup: Lookup) {
+    pub(super) fn lookup(&self, cache: &CacheName, lookup: Lookup) {
         self.lookups.add(
             1,
             &[
-                KeyValue::new("cache", cache.to_owned()),
+                KeyValue::new("cache", cache.to_shared()),
                 KeyValue::new("result", lookup.as_str()),
             ],
         );
     }
 
     /// Records the outcome of an upload.
-    pub(super) fn upload(&self, cache: &str, upload: Upload) {
+    pub(super) fn upload(&self, cache: &CacheName, upload: Upload) {
         self.uploads.add(
             1,
             &[
-                KeyValue::new("cache", cache.to_owned()),
+                KeyValue::new("cache", cache.to_shared()),
                 KeyValue::new("result", upload.as_str()),
             ],
         );
     }
 
     /// Records the content of a newly stored object.
-    pub(super) fn stored(&self, cache: &str, size: u64) {
+    pub(super) fn stored(&self, cache: &CacheName, size: u64) {
         self.stored
-            .add(size, &[KeyValue::new("cache", cache.to_owned())]);
+            .add(size, &[KeyValue::new("cache", cache.to_shared())]);
     }
 
     /// Records object content that is sent to a client.
-    pub(super) fn served(&self, cache: &str, size: u64) {
+    pub(super) fn served(&self, cache: &CacheName, size: u64) {
         self.served
-            .add(size, &[KeyValue::new("cache", cache.to_owned())]);
+            .add(size, &[KeyValue::new("cache", cache.to_shared())]);
     }
 }

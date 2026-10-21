@@ -21,7 +21,7 @@ use self::hashserv::HashservStats;
 use self::metrics::{Lookup, ObjectMetrics, Upload};
 use super::credential;
 use crate::access::{AccessLog, Accessed};
-use crate::cache::{Caches, Hit, ObjectKey, Protocol, PutError, Stored};
+use crate::cache::{Cache, Caches, Hit, ObjectKey, Protocol, PutError, Stored};
 use crate::content::{Content, Encoding, WriteError};
 use crate::token::{Grant, TokenKey};
 
@@ -64,8 +64,8 @@ struct MissingResponse {
 
 impl Objects {
     /// Looks up an entry and records the read.
-    async fn fetch(&self, client: &Client, cache: &str, key: &str) -> Result<Hit, StatusCode> {
-        let found = self.caches.get(cache).ok_or(StatusCode::NOT_FOUND)?;
+    async fn fetch(&self, client: &Client, found: &Cache, key: &str) -> Result<Hit, StatusCode> {
+        let cache = found.name();
         let object = ObjectKey::try_from(key).map_err(|_invalid| StatusCode::BAD_REQUEST)?;
         match found.get(client, &object).await {
             Ok(Some(hit)) => {
@@ -89,7 +89,7 @@ impl Objects {
                 self.metrics.lookup(cache, Lookup::Error);
                 tracing::error!(
                     error = &err as &dyn Error,
-                    cache,
+                    cache = cache.as_ref(),
                     key,
                     "failed to look up an entry"
                 );
@@ -159,27 +159,29 @@ pub(super) fn router(
 /// Streams an object, from the fallback cache if needed.
 async fn get_object(State(state): State<Objects>, path: Path<(String, String)>) -> Response {
     let Path((cache, key)) = &path;
-    if let Some(found) = state.caches.get(cache)
-        && let Protocol::Nix(settings) = found.protocol()
-    {
+    let Some(found) = state.caches.get(cache) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if let Protocol::Nix(settings) = found.protocol() {
         return nix::get(&state, found, settings, key, false).await;
     }
-    serve_file(&state, cache, key, false).await
+    serve_file(&state, found, key, false).await
 }
 
 /// Returns the headers of an object, from the fallback cache if needed.
 async fn head_object(State(state): State<Objects>, path: Path<(String, String)>) -> Response {
     let Path((cache, key)) = &path;
-    if let Some(found) = state.caches.get(cache)
-        && let Protocol::Nix(settings) = found.protocol()
-    {
+    let Some(found) = state.caches.get(cache) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if let Protocol::Nix(settings) = found.protocol() {
         return nix::get(&state, found, settings, key, true).await;
     }
-    serve_file(&state, cache, key, true).await
+    serve_file(&state, found, key, true).await
 }
 
 /// Serves the plain content of an entry, from the fallback cache if needed.
-async fn serve_file(state: &Objects, cache: &str, key: &str, head: bool) -> Response {
+async fn serve_file(state: &Objects, cache: &Cache, key: &str, head: bool) -> Response {
     let client = match state.client().await {
         Ok(client) => client,
         Err(status) => return status.into_response(),
@@ -197,7 +199,7 @@ async fn serve_file(state: &Objects, cache: &str, key: &str, head: bool) -> Resp
         .await
     {
         Ok(stream) => {
-            state.metrics.served(cache, hit.size);
+            state.metrics.served(cache.name(), hit.size);
             (object_headers(&hit), Body::from_stream(stream)).into_response()
         }
         Err(err) => {
@@ -243,21 +245,21 @@ async fn put_object(
     {
         Ok(Stored::New { size }) => {
             tracing::debug!(sub = grant.sub, cache, key, size, "stored an object");
-            state.metrics.upload(&cache, Upload::Stored);
-            state.metrics.stored(&cache, size);
+            state.metrics.upload(found.name(), Upload::Stored);
+            state.metrics.stored(found.name(), size);
             StatusCode::CREATED
         }
         Ok(Stored::Existing) => {
-            state.metrics.upload(&cache, Upload::Existing);
+            state.metrics.upload(found.name(), Upload::Existing);
             StatusCode::NO_CONTENT
         }
         Err(err @ PutError::Write(WriteError::Body(_))) => {
-            state.metrics.upload(&cache, Upload::Aborted);
+            state.metrics.upload(found.name(), Upload::Aborted);
             tracing::info!(error = &err as &dyn Error, cache, key, "upload aborted");
             StatusCode::BAD_REQUEST
         }
         Err(err) => {
-            state.metrics.upload(&cache, Upload::Error);
+            state.metrics.upload(found.name(), Upload::Error);
             tracing::error!(
                 error = &err as &dyn Error,
                 cache,

@@ -84,7 +84,7 @@ impl TaskMetrics {
     /// Records the entries expired in a cache.
     pub(super) fn expired(&self, cache: &CacheName, count: u64) {
         self.expired
-            .add(count, &[KeyValue::new("cache", cache.to_string())]);
+            .add(count, &[KeyValue::new("cache", cache.to_shared())]);
     }
 
     /// Records what collection deleted.
