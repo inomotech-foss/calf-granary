@@ -187,6 +187,11 @@ impl StoreConfig {
 struct CacheConfig {
     /// The store that new chunks go to.
     store: StoreName,
+    /// Whether content is split into deduplicated, compressed chunks.
+    ///
+    /// Worth it for content that isn't compressed already.
+    #[serde(default)]
+    chunking: bool,
     /// How long entries are kept after they were last read or written.
     retention: Option<ConfigDuration>,
     /// The cache to read from when an entry is missing.
@@ -199,6 +204,7 @@ impl CacheConfig {
         Cache::new(
             name.clone(),
             self.store.clone(),
+            self.chunking,
             self.retention.map(Into::into),
             fallback,
         )

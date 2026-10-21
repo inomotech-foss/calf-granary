@@ -1,5 +1,7 @@
 //! Reading and writing objects over HTTP.
 
+use core::iter;
+
 use reqwest::StatusCode;
 use reqwest::header::{AUTHORIZATION, CONTENT_LENGTH};
 
@@ -208,4 +210,78 @@ async fn stores_identical_content_once() {
     assert_eq!(count("entry").await, 3, "every key has an entry");
     assert_eq!(count("blob").await, 1, "the content is one blob");
     assert_eq!(count("chunk").await, 1, "the content is one chunk");
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres and object storage"]
+async fn chunks_content_for_deduplication() {
+    let stack = Stack::new(
+        "[caches.chunked]\nstore = \"test\"\nchunking = true\n\n[caches.whole]\nstore = \"test\"\n",
+    )
+    .await;
+    stack.migrate().await;
+    let server = stack.serve().await;
+    let token = stack.token(&["chunked", "whole"]).await;
+    let mut state = 7u64;
+    let original: Vec<u8> = iter::repeat_with(|| {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        state.to_be_bytes()[0]
+    })
+    .take(3 * 1024 * 1024)
+    .collect();
+    let mut changed = b"a small change".to_vec();
+    changed.extend_from_slice(&original);
+
+    let uploads = [
+        ("chunked/original", &original),
+        ("chunked/changed", &changed),
+        ("whole/original", &original),
+    ];
+    for (path, content) in uploads {
+        assert_eq!(
+            put(&server, Some(&token), path, content.clone()).await,
+            StatusCode::CREATED,
+            "{path} is stored"
+        );
+        assert_eq!(
+            get(&server, path).await,
+            (StatusCode::OK, content.clone()),
+            "{path} reads back"
+        );
+    }
+    assert!(server.stop().await.success(), "serve stops cleanly");
+
+    let database = stack.database().await;
+    let row = database
+        .query_one(
+            "SELECT count(*), count(*) FILTER (WHERE compression = 'zstd') FROM chunk WHERE \
+             EXISTS (SELECT FROM blob_chunk WHERE chunk_id = chunk.id)",
+            &[],
+        )
+        .await
+        .unwrap();
+    let (chunks, compressed): (i64, i64) = (row.get(0), row.get(1));
+    let first: i64 = database
+        .query_one(
+            "SELECT count(*) FROM blob_chunk JOIN entry USING (blob_id) WHERE entry.key = \
+             'original' AND entry.cache = 'chunked'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(first > 10, "the content is split");
+    assert_eq!(compressed, chunks, "referenced chunks are compressed");
+    assert!(
+        chunks <= first + 2,
+        "the changed copy shares all but the first chunks: {chunks} for {first}"
+    );
+    let blobs: i64 = database
+        .query_one("SELECT count(*) FROM blob", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(blobs, 2, "the whole copy reuses the chunked blob");
 }

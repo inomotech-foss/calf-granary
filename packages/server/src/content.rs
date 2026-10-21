@@ -5,6 +5,7 @@
 //! are random, so a race between two writers of the same chunk leaves one
 //! object that the loser deletes.
 
+mod chunker;
 mod collect;
 mod read;
 mod upload;
@@ -24,8 +25,14 @@ use crate::store::Stores;
 /// The prefix of chunk objects within a store.
 const CHUNK_PREFIX: &str = "chunks";
 
-/// Chunk compression as stored in Postgres.
+/// The compression of chunks stored as they are.
 const UNCOMPRESSED: &str = "none";
+
+/// The compression of chunks stored as one zstd frame each.
+const ZSTD: &str = "zstd";
+
+/// The zstd level of new chunks.
+const ZSTD_LEVEL: i32 = 8;
 
 /// Content in object storage, indexed in Postgres.
 #[derive(Debug)]

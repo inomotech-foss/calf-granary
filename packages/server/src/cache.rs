@@ -152,6 +152,8 @@ pub(crate) struct Cache {
     name: CacheName,
     /// The store that new chunks go to.
     store: StoreName,
+    /// Whether content is split into deduplicated, compressed chunks.
+    chunking: bool,
     /// How long entries are kept after they were last read or written.
     retention: Option<Duration>,
     /// The cache to read from when an entry is missing.
@@ -163,12 +165,14 @@ impl Cache {
     pub(crate) const fn new(
         name: CacheName,
         store: StoreName,
+        chunking: bool,
         retention: Option<Duration>,
         fallback: Option<Arc<Self>>,
     ) -> Self {
         Self {
             name,
             store,
+            chunking,
             retention,
             fallback,
         }
@@ -229,7 +233,11 @@ impl Cache {
         if exists {
             return Ok(Stored::Existing);
         }
-        let blob = content.write(pool, &self.store, body).await?;
+        let blob = if self.chunking {
+            content.write_chunked(pool, &self.store, body).await?
+        } else {
+            content.write(pool, &self.store, body).await?
+        };
         let mut client = pool.get().await?;
         let transaction = client.transaction().await?;
         let blob_id = content.commit(&transaction, &blob).await?;

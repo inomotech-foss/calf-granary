@@ -22,6 +22,7 @@ bytes = { workspace = true }
 calf-granary-server-db = { workspace = true, features = ["deadpool"] }
 chrono = { workspace = true, features = ["clock"] }
 deadpool-postgres = { workspace = true, features = ["rt_tokio_1"] }
+fastcdc = { workspace = true }
 futures = { workspace = true }
 jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
 object_store = { workspace = true, features = ["aws"] }
@@ -50,6 +51,7 @@ tokio-postgres-rustls = { workspace = true, features = ["aws-lc-rs"] }
 toml = { workspace = true, features = ["parse", "serde", "std"] }
 tracing = { workspace = true, features = ["std"] }
 tracing-opentelemetry = { workspace = true }
+zstd = { workspace = true }
 
 [dependencies.clap]
 workspace = true
