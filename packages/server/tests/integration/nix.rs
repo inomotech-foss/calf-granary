@@ -7,7 +7,7 @@ use aws_lc_rs::signature::{ED25519, UnparsedPublicKey};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use reqwest::StatusCode;
-use reqwest::header::AUTHORIZATION;
+use reqwest::header::{AUTHORIZATION, CONTENT_LENGTH};
 use serde_json::{Value, json};
 use tokio::process::Command;
 
@@ -142,6 +142,17 @@ async fn check_store_path(server: &Server, cache: &str, nar: &[u8]) {
     verify(server, cache, &narinfo).await;
 
     let url = field(&narinfo, "URL");
+    let head = server
+        .http()
+        .head(server.url(&format!("{cache}/{url}")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        head.headers()[CONTENT_LENGTH],
+        field(&narinfo, "FileSize"),
+        "HEAD reports the file size"
+    );
     let response = server
         .http()
         .get(server.url(&format!("{cache}/{url}")))

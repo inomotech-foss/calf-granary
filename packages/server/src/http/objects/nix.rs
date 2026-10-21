@@ -245,9 +245,23 @@ async fn nar(state: &Objects, cache: &Cache, hash: &str, head: bool) -> Response
         cache: hit.cache.clone(),
         key,
     });
-    let content_type = HeaderValue::from_static("application/x-nix-nar");
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/x-nix-nar"),
+    );
+    match state.content.zstd_size(&client, hit.blob_id).await {
+        Ok(Some(size)) => {
+            headers.insert(CONTENT_LENGTH, HeaderValue::from(size));
+        }
+        Ok(None) => {}
+        Err(err) => {
+            tracing::error!(error = &err as &dyn Error, "failed to size a NAR");
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+    }
     if head {
-        return ([(CONTENT_TYPE, content_type)], ()).into_response();
+        return (headers, ()).into_response();
     }
     match state
         .content
@@ -256,7 +270,7 @@ async fn nar(state: &Objects, cache: &Cache, hash: &str, head: bool) -> Response
     {
         Ok(stream) => {
             state.metrics.served(cache.name().as_ref(), hit.size);
-            ([(CONTENT_TYPE, content_type)], Body::from_stream(stream)).into_response()
+            (headers, Body::from_stream(stream)).into_response()
         }
         Err(err) => {
             tracing::error!(error = &err as &dyn Error, "failed to read a NAR");

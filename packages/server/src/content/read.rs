@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use calf_granary_server_db::client::GenericClient;
-use calf_granary_server_db::queries::content::blob_chunks;
+use calf_granary_server_db::queries::content::{blob_chunks, zstd_size};
 use futures::stream::{self, BoxStream};
 use futures::{StreamExt as _, TryStreamExt as _};
 use object_store::path::Path;
@@ -65,6 +65,20 @@ impl Part {
 }
 
 impl Content {
+    /// The size of a blob in the zstd encoding, if every chunk is stored as
+    /// zstd and the frames are served as they are.
+    pub(crate) async fn zstd_size<C>(
+        &self,
+        client: &C,
+        blob_id: i64,
+    ) -> Result<Option<u64>, tokio_postgres::Error>
+    where
+        C: GenericClient + Sync,
+    {
+        let size = zstd_size().bind(client, &blob_id).one().await?;
+        Ok(size.and_then(|size| u64::try_from(size).ok()))
+    }
+
     /// Streams the content of a blob in the encoding.
     ///
     /// The chunk list is read up front, so the stream doesn't hold a

@@ -93,3 +93,9 @@ WHERE id = any(:ids::bigint[])
 SELECT object_key
 FROM chunk
 WHERE store = :store::text AND object_key = any(:keys::text[]);
+
+--! zstd_size : (size?)
+SELECT CASE WHEN bool_and(chunk.compression = 'zstd') THEN sum(chunk.stored_size)::bigint END AS size
+FROM blob_chunk
+JOIN chunk ON chunk.id = blob_chunk.chunk_id
+WHERE blob_chunk.blob_id = :blob_id::bigint;
