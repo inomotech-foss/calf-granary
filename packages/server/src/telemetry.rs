@@ -1,7 +1,7 @@
 //! Logs on stdout and traces, metrics and logs over OTLP.
 
 use core::error::Error;
-use std::env;
+use std::{env, io};
 
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::{KeyValue, global};
@@ -131,6 +131,15 @@ impl Telemetry {
     /// fails.
     pub(crate) fn fallback() {
         fmt().with_env_filter(filter()).init();
+    }
+
+    /// Installs a subscriber that only logs to stderr, for commands whose
+    /// stdout is their result.
+    pub(crate) fn stderr() {
+        fmt()
+            .with_env_filter(filter())
+            .with_writer(io::stderr)
+            .init();
     }
 
     /// Flushes and stops the providers.

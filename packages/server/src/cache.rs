@@ -6,6 +6,7 @@ mod upload;
 use core::borrow::Borrow;
 use core::error::Error;
 use core::fmt;
+use core::str::FromStr;
 use core::time::Duration;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -51,6 +52,14 @@ impl Borrow<str> for CacheName {
 impl fmt::Display for CacheName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+impl FromStr for CacheName {
+    type Err = InvalidCacheName;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        name.to_owned().try_into()
     }
 }
 

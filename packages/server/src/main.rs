@@ -9,6 +9,7 @@ mod duration;
 mod exchange;
 mod http;
 mod migrations;
+mod mint;
 mod notifications;
 mod oidc;
 mod prune;
@@ -29,6 +30,7 @@ use tokio::task;
 
 use crate::database::DatabaseArgs;
 use crate::migrations::MigrationError;
+use crate::mint::{MintArgs, MintError};
 use crate::prune::{PruneArgs, PruneCommandError};
 use crate::serve::{ServeArgs, ServeError};
 use crate::telemetry::Telemetry;
@@ -56,18 +58,24 @@ enum Command {
     Prune(PruneArgs),
     /// Serve the caches over HTTP.
     Serve(ServeArgs),
+    /// Sign a write token without exchanging an ID token.
+    Token(MintArgs),
     /// Run scheduled and requested background tasks.
     Worker(WorkerArgs),
 }
 
 impl Command {
     /// The `service.name` of the process in telemetry.
-    const fn service_name(&self) -> &'static str {
+    ///
+    /// Commands that print their result to stdout have none and only log to
+    /// stderr.
+    const fn service_name(&self) -> Option<&'static str> {
         match self {
-            Self::Migrate { database: _ } => "migrate",
-            Self::Prune(_) => "prune",
-            Self::Serve(_) => "serve",
-            Self::Worker(_) => "worker",
+            Self::Migrate { database: _ } => Some("migrate"),
+            Self::Prune(_) => Some("prune"),
+            Self::Serve(_) => Some("serve"),
+            Self::Token(_) => None,
+            Self::Worker(_) => Some("worker"),
         }
     }
 
@@ -82,6 +90,7 @@ impl Command {
             }
             Self::Prune(args) => Ok(args.run().await?),
             Self::Serve(args) => Ok(args.run().await?),
+            Self::Token(args) => Ok(args.run()?),
             Self::Worker(args) => Ok(args.run().await?),
         }
     }
@@ -96,6 +105,9 @@ enum CommandError {
     /// Applying migrations failed.
     #[error(transparent)]
     Migrate(#[from] MigrationError),
+    /// Signing a token failed.
+    #[error(transparent)]
+    Mint(#[from] MintError),
     /// Pruning failed.
     #[error(transparent)]
     Prune(#[from] PruneCommandError),
@@ -110,12 +122,16 @@ enum CommandError {
 #[tokio::main]
 async fn main() -> ExitCode {
     let command = Cli::parse().command;
-    let telemetry = match Telemetry::init(command.service_name()) {
-        Ok(telemetry) => telemetry,
-        Err(err) => {
+    let telemetry = match command.service_name().map(Telemetry::init) {
+        Some(Ok(telemetry)) => Some(telemetry),
+        Some(Err(err)) => {
             Telemetry::fallback();
             tracing::error!(error = &err as &dyn Error, "failed to set up telemetry");
             return ExitCode::FAILURE;
+        }
+        None => {
+            Telemetry::stderr();
+            None
         }
     };
 
@@ -126,7 +142,9 @@ async fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     };
-    if let Err(err) = task::spawn_blocking(move || telemetry.shutdown()).await {
+    if let Some(telemetry) = telemetry
+        && let Err(err) = task::spawn_blocking(move || telemetry.shutdown()).await
+    {
         tracing::error!(error = &err as &dyn Error, "failed to flush telemetry");
     }
     code
