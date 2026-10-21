@@ -5,6 +5,7 @@ mod objects;
 mod observe;
 mod token;
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use axum::http::HeaderMap;
@@ -62,15 +63,17 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
 ///
 /// Besides bearer tokens, this accepts the token as the password of basic
 /// authentication, which is what Nix sends from a netrc file.
-fn credential(headers: &HeaderMap) -> Option<String> {
+fn credential(headers: &HeaderMap) -> Option<Cow<'_, str>> {
     if let Some(token) = bearer(headers) {
-        return Some(token.to_owned());
+        return Some(Cow::Borrowed(token));
     }
     let (scheme, encoded) = headers.get(AUTHORIZATION)?.to_str().ok()?.split_once(' ')?;
     if !scheme.eq_ignore_ascii_case("basic") {
         return None;
     }
     let decoded = String::from_utf8(STANDARD.decode(encoded.trim()).ok()?).ok()?;
-    let (_, password) = decoded.split_once(':')?;
-    Some(password.to_owned())
+    let start = decoded.find(':')?.checked_add(1)?;
+    let mut password = decoded;
+    password.drain(..start);
+    Some(Cow::Owned(password))
 }

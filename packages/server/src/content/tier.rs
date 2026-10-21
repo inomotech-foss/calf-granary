@@ -23,11 +23,11 @@ const COPY_CONCURRENCY: usize = 8;
 
 /// Where the chunks of a cache belong.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Placement {
+pub(crate) struct Placement<'a> {
     /// The cache.
-    pub(crate) cache: String,
+    pub(crate) cache: &'a str,
     /// The store that new chunks of the cache go to.
-    pub(crate) store: String,
+    pub(crate) store: &'a str,
     /// The cache's retention in seconds, infinite without one.
     pub(crate) retention: f64,
 }
@@ -50,16 +50,10 @@ impl Content {
     pub(crate) async fn tier(
         &self,
         pool: &Pool,
-        placements: &[Placement],
+        placements: &[Placement<'_>],
     ) -> Result<TierStats, TierError> {
-        let caches: Vec<&str> = placements
-            .iter()
-            .map(|placement| placement.cache.as_str())
-            .collect();
-        let stores: Vec<&str> = placements
-            .iter()
-            .map(|placement| placement.store.as_str())
-            .collect();
+        let caches: Vec<&str> = placements.iter().map(|placement| placement.cache).collect();
+        let stores: Vec<&str> = placements.iter().map(|placement| placement.store).collect();
         let retentions: Vec<f64> = placements
             .iter()
             .map(|placement| placement.retention)

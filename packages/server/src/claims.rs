@@ -1,5 +1,6 @@
 //! Matching ID token claims against configured patterns.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
@@ -13,16 +14,15 @@ pub(crate) struct Pattern(String);
 impl Pattern {
     /// Checks whether the whole value matches the pattern.
     fn matches(&self, value: &str) -> bool {
-        let mut parts = self.0.split('*');
+        let Some((head, last)) = self.0.rsplit_once('*') else {
+            return value == self.0;
+        };
+        let mut parts = head.split('*');
         let first = parts.next().unwrap_or_default();
         let Some(mut rest) = value.strip_prefix(first) else {
             return false;
         };
-        let parts: Vec<&str> = parts.collect();
-        let Some((last, middle)) = parts.split_last() else {
-            return rest.is_empty();
-        };
-        for part in middle {
+        for part in parts {
             match rest.split_once(part) {
                 Some((_, after)) => rest = after,
                 None => return false,
@@ -46,8 +46,8 @@ impl Requirements {
     pub(crate) fn allow(&self, claims: &Map<String, Value>) -> bool {
         self.0.iter().all(|(name, patterns)| {
             let value = match claims.get(name) {
-                Some(Value::String(value)) => value.clone(),
-                Some(value @ (Value::Bool(_) | Value::Number(_))) => value.to_string(),
+                Some(Value::String(value)) => Cow::Borrowed(value.as_str()),
+                Some(value @ (Value::Bool(_) | Value::Number(_))) => Cow::Owned(value.to_string()),
                 Some(Value::Array(_) | Value::Object(_) | Value::Null) | None => return false,
             };
             patterns.iter().any(|pattern| pattern.matches(&value))

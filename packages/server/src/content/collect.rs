@@ -133,10 +133,7 @@ async fn sweep(
         .try_chunks(BATCH_SIZE);
     while let Some(batch) = listing.next().await {
         let batch: Vec<ObjectMeta> = batch.map_err(|err| CollectError::List(err.1))?;
-        let keys: Vec<String> = batch
-            .iter()
-            .map(|meta| meta.location.as_ref().to_owned())
-            .collect();
+        let keys: Vec<&str> = batch.iter().map(|meta| meta.location.as_ref()).collect();
         let known: HashSet<String> = known_objects()
             .bind(client, &name.as_ref(), &keys.as_slice())
             .all()

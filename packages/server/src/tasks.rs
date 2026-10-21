@@ -171,14 +171,14 @@ impl Runner {
     /// Moves chunks to the store of their longest-lived cache and records
     /// what moved.
     async fn tier(&self, id: i64) -> Result<(), TaskError> {
-        let placements: Vec<Placement> = self
+        let placements: Vec<Placement<'_>> = self
             .caches
             .iter()
             .filter_map(|(name, cache)| {
                 let (store, retention) = cache.placement()?;
                 Some(Placement {
-                    cache: name.to_string(),
-                    store: store.to_string(),
+                    cache: name.as_ref(),
+                    store: store.as_ref(),
                     retention: retention.map_or(f64::INFINITY, |retention| retention.as_secs_f64()),
                 })
             })

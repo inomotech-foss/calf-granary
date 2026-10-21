@@ -3,6 +3,7 @@
 use std::time::Instant;
 
 use axum::extract::{MatchedPath, Request, State};
+use axum::http::Method;
 use axum::middleware::Next;
 use axum::response::Response;
 use opentelemetry::metrics::Histogram;
@@ -48,14 +49,14 @@ pub(super) async fn observe(
     request: Request,
     next: Next,
 ) -> Response {
-    let method = request.method().as_str().to_owned();
+    let method = method_name(request.method());
     let route = request
         .extensions()
         .get::<MatchedPath>()
         .map_or_else(String::new, |path| path.as_str().to_owned());
     let span = tracing::info_span!(
         "request",
-        otel.name = format!("{method} {route}"),
+        otel.name = %format_args!("{method} {route}"),
         otel.kind = "server",
         http.request.method = method,
         http.route = route,
@@ -74,4 +75,21 @@ pub(super) async fn observe(
         ],
     );
     response
+}
+
+/// The name of a request method, or `_OTHER` for unknown ones as the
+/// semantic conventions ask.
+const fn method_name(method: &Method) -> &'static str {
+    match *method {
+        Method::GET => "GET",
+        Method::HEAD => "HEAD",
+        Method::POST => "POST",
+        Method::PUT => "PUT",
+        Method::DELETE => "DELETE",
+        Method::OPTIONS => "OPTIONS",
+        Method::PATCH => "PATCH",
+        Method::CONNECT => "CONNECT",
+        Method::TRACE => "TRACE",
+        _ => "_OTHER",
+    }
 }
