@@ -11,7 +11,7 @@ let
       fallback = "main";
     };
   };
-  buckets = lib.unique (lib.mapAttrsToList (_: cache: cache.bucket) caches);
+  buckets = lib.unique (lib.mapAttrsToList (_: cache: cache.bucket) caches) ++ [ "granary-test" ];
 in
 {
   ephemeris.gitignore.entries = [ "/.dev" ];

@@ -71,6 +71,7 @@ features = ["ansi", "env-filter", "fmt", "registry", "std"]
 
 [dev-dependencies]
 aws-lc-rs = { workspace = true, features = ["aws-lc-sys"] }
+tokio = { workspace = true, features = ["process"] }
 tower = { workspace = true, features = ["util"] }
 
 [lints]
