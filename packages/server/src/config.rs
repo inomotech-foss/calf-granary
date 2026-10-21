@@ -264,13 +264,13 @@ impl CacheConfig {
             (ProtocolName::Hashserv, None) if self.priority.is_none() && !self.chunking => {
                 Protocol::Hashserv
             }
-            (ProtocolName::Nix, Some(path)) => Protocol::Nix(NixCache {
-                key: SigningKey::load(path).map_err(|source| ConfigError::SigningKey {
+            (ProtocolName::Nix, Some(path)) => Protocol::Nix(NixCache::new(
+                SigningKey::load(path).map_err(|source| ConfigError::SigningKey {
                     cache: name.clone(),
                     source,
                 })?,
-                priority: self.priority.unwrap_or(DEFAULT_NIX_PRIORITY),
-            }),
+                self.priority.unwrap_or(DEFAULT_NIX_PRIORITY),
+            )),
             (ProtocolName::Files | ProtocolName::Hashserv, _) | (ProtocolName::Nix, None) => {
                 return Err(ConfigError::NixSettings {
                     cache: name.clone(),

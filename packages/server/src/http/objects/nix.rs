@@ -11,6 +11,7 @@ use axum::extract::{Path, State};
 use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse as _, Response};
+use bytes::Bytes;
 use futures::TryStreamExt as _;
 use serde::{Deserialize, Serialize};
 use tokio_util::io::{ReaderStream, StreamReader};
@@ -20,15 +21,16 @@ use super::metrics::{Lookup, Upload};
 use crate::access::Accessed;
 use crate::cache::{Cache, NarCompression, NixCache, NixPutError, ObjectKey, Protocol, Stored};
 use crate::content::{Encoding, WriteError};
-use crate::nix::{
-    NarInfo, PathInfo, STORE_DIR, StorePath, StorePathHash, UploadedNarInfo, parse_sha256,
-};
+use crate::nix::{NarInfo, PathInfo, StorePath, StorePathHash, UploadedNarInfo, parse_sha256};
 
 /// The header that carries the metadata of an uploaded NAR as JSON.
 const NAR_INFO_HEADER: &str = "x-granary-nar-info";
 
 /// The largest narinfo that `nix copy` may upload.
 const MAX_NARINFO_SIZE: usize = 1024 * 1024;
+
+/// The usual size of a rendered narinfo, which most fit in.
+const NARINFO_CAPACITY: usize = 1024;
 
 /// The most hashes one missing-paths request may ask about.
 const MAX_HASHES: usize = 10_000;
@@ -100,11 +102,7 @@ pub(super) async fn get(
     head: bool,
 ) -> Response {
     if key == "nix-cache-info" {
-        let text = format!(
-            "StoreDir: {STORE_DIR}\nWantMassQuery: 1\nPriority: {}\n",
-            nix.priority
-        );
-        return text_response("text/x-nix-cache-info", text, head);
+        return text_response("text/x-nix-cache-info", nix.cache_info(), head);
     }
     if let Some(hash) = key.strip_suffix(".narinfo") {
         return narinfo(state, cache, nix, hash, head).await;
@@ -200,13 +198,15 @@ async fn narinfo(
                 cache: hit.cache.clone(),
                 key,
             });
+            let mut text = String::with_capacity(NARINFO_CAPACITY);
             let info = NarInfo {
-                path: hit.info,
-                url: format!("nar/{}.nar.zst", hash.as_ref()),
-                compression: "zstd",
+                path: &hit.info,
                 file_size: hit.file_size,
             };
-            text_response("text/x-nix-narinfo", info.render(&nix.key), head)
+            if info.render(&nix.key, &mut text).is_err() {
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+            text_response("text/x-nix-narinfo", text, head)
         }
         Ok(None) => {
             state.metrics.lookup(name, Lookup::Miss);
@@ -443,7 +443,9 @@ pub(super) async fn public_key(
     Path(cache): Path<String>,
 ) -> Response {
     match state.caches.get(&cache).map(Cache::protocol) {
-        Some(Protocol::Nix(nix)) => text_response("text/plain", nix.key.public_key(), false),
+        Some(Protocol::Nix(nix)) => {
+            text_response("text/plain", nix.key.public_key().to_owned(), false)
+        }
         Some(Protocol::Files | Protocol::Hashserv) | None => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -488,7 +490,11 @@ pub(super) async fn missing(
 }
 
 /// A text response, without the body for HEAD requests.
-fn text_response(content_type: &'static str, text: String, head: bool) -> Response {
+fn text_response<T>(content_type: &'static str, text: T, head: bool) -> Response
+where
+    T: Into<Bytes>,
+{
+    let text = text.into();
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
     headers.insert(CONTENT_LENGTH, HeaderValue::from(text.len()));

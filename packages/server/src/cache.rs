@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 pub(crate) use self::hashserv::{HashservError, Report, StoredReport};
 pub(crate) use self::nix::{NarCompression, NixPutError};
 use crate::content::{Content, WriteError};
-use crate::nix::SigningKey;
+use crate::nix::{STORE_DIR, SigningKey};
 use crate::sha256::{InvalidSha256, Sha256};
 use crate::store::StoreName;
 
@@ -192,8 +192,24 @@ impl Protocol {
 pub(crate) struct NixCache {
     /// Signs the narinfos.
     pub(crate) key: SigningKey,
-    /// The `Priority` in `nix-cache-info`.
-    pub(crate) priority: u32,
+    /// The text of `nix-cache-info`.
+    cache_info: Bytes,
+}
+
+impl NixCache {
+    /// Creates the settings of a cache with a `Priority`.
+    pub(crate) fn new(key: SigningKey, priority: u32) -> Self {
+        let cache_info = format!("StoreDir: {STORE_DIR}\nWantMassQuery: 1\nPriority: {priority}\n");
+        Self {
+            key,
+            cache_info: cache_info.into(),
+        }
+    }
+
+    /// The text of `nix-cache-info`.
+    pub(crate) fn cache_info(&self) -> Bytes {
+        self.cache_info.clone()
+    }
 }
 
 /// A cache: a namespace of entries with a retention.

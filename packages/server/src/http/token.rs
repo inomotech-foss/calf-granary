@@ -1,6 +1,7 @@
 //! Exchanging ID tokens for granary tokens.
 
 use core::error::Error;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use axum::extract::State;
@@ -39,12 +40,14 @@ impl ExchangeError {
 
 impl Tokens {
     /// The URL that clients reach the server at, without a trailing slash.
-    fn base_url(&self, headers: &HeaderMap) -> String {
-        let base = self
-            .public_url
-            .as_deref()
-            .map_or_else(|| request_url(headers), ToOwned::to_owned);
-        base.trim_end_matches('/').to_owned()
+    fn base_url(&self, headers: &HeaderMap) -> Cow<'_, str> {
+        if let Some(url) = self.public_url.as_deref() {
+            return Cow::Borrowed(url.trim_end_matches('/'));
+        }
+        let mut url = request_url(headers);
+        let len = url.trim_end_matches('/').len();
+        url.truncate(len);
+        Cow::Owned(url)
     }
 }
 
@@ -73,7 +76,7 @@ struct Tokens {
 
 /// A granary token and the caches it grants.
 #[derive(Debug, Serialize)]
-struct TokenResponse {
+struct TokenResponse<'a> {
     /// The granary token.
     token: String,
     /// When the token expires, in seconds since the Unix epoch.
@@ -81,30 +84,30 @@ struct TokenResponse {
     /// The tier that the ID token mapped to.
     tier: String,
     /// The caches that the token may write to and read through.
-    caches: Vec<CacheInfo>,
+    caches: Vec<CacheInfo<'a>>,
 }
 
 /// The caches that jobs without an ID token read from.
 #[derive(Debug, Serialize)]
-struct AnonymousResponse {
+struct AnonymousResponse<'a> {
     /// The caches.
-    caches: Vec<CacheInfo>,
+    caches: Vec<CacheInfo<'a>>,
 }
 
 /// How a client uses a granted cache.
 #[derive(Debug, Serialize)]
-struct CacheInfo {
+struct CacheInfo<'a> {
     /// The cache name.
-    name: String,
+    name: &'a str,
     /// The protocol, `files`, `nix` or `hashserv`.
     protocol: &'static str,
     /// What the cache is for, such as `sstate` or `downloads`.
-    role: String,
+    role: &'a str,
     /// The URL that clients use.
     url: String,
     /// The public key of a Nix cache, for `trusted-public-keys`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    public_key: Option<String>,
+    public_key: Option<&'a str>,
 }
 
 /// Builds the router for the token exchange.
@@ -171,27 +174,24 @@ async fn issue(State(state): State<Tokens>, headers: HeaderMap) -> Response {
 }
 
 /// Describes a cache for clients.
-fn describe(cache: &Cache, base: &str) -> CacheInfo {
+fn describe<'a>(cache: &'a Cache, base: &str) -> CacheInfo<'a> {
     let name = cache.name().as_ref();
     let (protocol, url, public_key) = match cache.protocol() {
         Protocol::Files => ("files", format!("{base}/{name}"), None),
         Protocol::Nix(nix) => ("nix", format!("{base}/{name}"), Some(nix.key.public_key())),
         Protocol::Hashserv => {
-            let socket = base
+            let (scheme, rest) = base
                 .strip_prefix("https://")
-                .map(|rest| format!("wss://{rest}"))
-                .or_else(|| {
-                    base.strip_prefix("http://")
-                        .map(|rest| format!("ws://{rest}"))
-                })
-                .unwrap_or_else(|| base.to_owned());
-            ("hashserv", format!("{socket}/_hashserv/{name}"), None)
+                .map(|rest| ("wss://", rest))
+                .or_else(|| base.strip_prefix("http://").map(|rest| ("ws://", rest)))
+                .unwrap_or(("", base));
+            ("hashserv", format!("{scheme}{rest}/_hashserv/{name}"), None)
         }
     };
     CacheInfo {
-        name: name.to_owned(),
+        name,
         protocol,
-        role: cache.role().to_owned(),
+        role: cache.role(),
         url,
         public_key,
     }
@@ -235,42 +235,30 @@ mod tests {
 
     #[test]
     fn describes_caches() {
-        let files = describe(
-            &cache("sstate-pr", Protocol::Files, Some("sstate")),
-            "https://g.example",
-        );
+        let files = cache("sstate-pr", Protocol::Files, Some("sstate"));
+        let files = describe(&files, "https://g.example");
         assert_eq!(files.url, "https://g.example/sstate-pr", "files URL");
         assert_eq!(files.role, "sstate", "configured role");
 
-        let nix = describe(
-            &cache(
-                "nix-pr",
-                Protocol::Nix(NixCache {
-                    key: SigningKey::load_text(TEST_KEY).unwrap(),
-                    priority: 41,
-                }),
-                None,
-            ),
-            "https://g.example",
+        let nix = cache(
+            "nix-pr",
+            Protocol::Nix(NixCache::new(SigningKey::load_text(TEST_KEY).unwrap(), 41)),
+            None,
         );
+        let nix = describe(&nix, "https://g.example");
         assert_eq!(nix.role, "nix", "the role defaults to the protocol");
         assert!(
             nix.public_key.is_some_and(|key| key.starts_with("test-1:")),
             "Nix caches name their key"
         );
 
-        let hashserv = describe(
-            &cache("hash-pr", Protocol::Hashserv, None),
-            "https://g.example",
-        );
+        let hashserv_cache = cache("hash-pr", Protocol::Hashserv, None);
+        let hashserv = describe(&hashserv_cache, "https://g.example");
         assert_eq!(
             hashserv.url, "wss://g.example/_hashserv/hash-pr",
             "secure WebSocket"
         );
-        let local = describe(
-            &cache("hash-pr", Protocol::Hashserv, None),
-            "http://localhost:8080",
-        );
+        let local = describe(&hashserv_cache, "http://localhost:8080");
         assert_eq!(
             local.url, "ws://localhost:8080/_hashserv/hash-pr",
             "plain WebSocket"

@@ -4,8 +4,9 @@ use core::fmt;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
-use aws_lc_rs::signature::{Ed25519KeyPair, KeyPair as _};
+use aws_lc_rs::signature::{self, Ed25519KeyPair};
 use base64::Engine as _;
+use base64::display::Base64Display;
 use base64::engine::general_purpose::STANDARD;
 
 /// The length of a secret key: the seed followed by the public key.
@@ -20,6 +21,8 @@ pub(crate) struct SigningKey {
     name: String,
     /// The key pair.
     pair: Ed25519KeyPair,
+    /// The public key as `<name>:<base64>`.
+    public_key: String,
 }
 
 impl SigningKey {
@@ -45,19 +48,49 @@ impl SigningKey {
         let pair = Ed25519KeyPair::from_seed_and_public_key(seed, public).ok()?;
         Some(Self {
             name: name.to_owned(),
+            public_key: format!("{name}:{}", STANDARD.encode(public)),
             pair,
         })
     }
 
     /// The public key as `<name>:<base64>`, for `trusted-public-keys`.
-    pub(crate) fn public_key(&self) -> String {
-        format!("{}:{}", self.name, STANDARD.encode(self.pair.public_key()))
+    pub(crate) fn public_key(&self) -> &str {
+        &self.public_key
     }
 
-    /// Signs a fingerprint and returns `<name>:<base64 signature>`.
-    pub(crate) fn sign(&self, fingerprint: &str) -> String {
-        let signature = self.pair.sign(fingerprint.as_bytes());
-        format!("{}:{}", self.name, STANDARD.encode(signature))
+    /// Signs a fingerprint.
+    pub(crate) fn sign(&self, fingerprint: &[u8]) -> Signature<'_> {
+        Signature {
+            name: &self.name,
+            signature: self.pair.sign(fingerprint),
+        }
+    }
+}
+
+/// A signature that displays as `<name>:<base64 signature>`.
+pub(crate) struct Signature<'a> {
+    /// The name of the key.
+    name: &'a str,
+    /// The signature.
+    signature: signature::Signature,
+}
+
+impl fmt::Debug for Signature<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Signature")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Display for Signature<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}:{}",
+            self.name,
+            Base64Display::new(self.signature.as_ref(), &STANDARD)
+        )
     }
 }
 
@@ -102,7 +135,7 @@ pub(crate) mod tests {
     #[test]
     fn signs_fingerprints() {
         let key = SigningKey::load_text(TEST_KEY).unwrap();
-        let signature = key.sign("fingerprint");
+        let signature = key.sign(b"fingerprint").to_string();
         let (name, signature) = signature.split_once(':').unwrap();
         assert_eq!(name, "test-1", "the key name prefixes the signature");
         let public = key.public_key();
