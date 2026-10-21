@@ -1,9 +1,9 @@
 --! insert_nix_path (deriver?, system?, ca?)
-INSERT INTO nix_path (cache, key, store_path, refs, deriver, system, ca)
+INSERT INTO nix_path (cache, key, name, refs, deriver, system, ca)
 VALUES (
     :cache::text,
     :key::text,
-    :store_path::text,
+    :name::text,
     :refs::text[],
     :deriver::text,
     :system::text,
@@ -12,7 +12,7 @@ VALUES (
 
 --! find_nix_path : (deriver?, system?, ca?, file_size?)
 SELECT
-    nix_path.store_path,
+    nix_path.name,
     nix_path.refs,
     nix_path.deriver,
     nix_path.system,

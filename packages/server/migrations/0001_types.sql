@@ -22,6 +22,9 @@ CREATE DOMAIN chunk_key AS text
 CREATE DOMAIN nix_hash_part AS text
     CHECK (VALUE ~ '^[0-9a-df-np-sv-z]{32}$');
 
+CREATE DOMAIN nix_path_name AS text
+    CHECK (VALUE ~ '^[A-Za-z0-9+_?=-][A-Za-z0-9+._?=-]{0,210}$');
+
 CREATE DOMAIN nix_base_name AS text
     CHECK (VALUE ~ '^[0-9a-df-np-sv-z]{32}-[A-Za-z0-9+_?=-][A-Za-z0-9+._?=-]{0,210}$');
 

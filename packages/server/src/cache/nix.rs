@@ -50,15 +50,14 @@ impl Cache {
             let Some(row) = row else {
                 continue;
             };
-            let parse = |base_name: &str| StorePath::from_base_name(base_name);
             let info = PathInfo {
-                store_path: StorePath::try_from(row.store_path.as_str())?,
+                store_path: StorePath::new(*hash, &row.name)?,
                 references: row
                     .refs
-                    .iter()
-                    .map(|reference| parse(reference))
+                    .into_iter()
+                    .map(StorePath::from_base_name)
                     .collect::<Result<_, _>>()?,
-                deriver: row.deriver.as_deref().map(parse).transpose()?,
+                deriver: row.deriver.map(StorePath::from_base_name).transpose()?,
                 system: row.system,
                 ca: row.ca,
                 nar_hash: row.hash,
@@ -327,13 +326,13 @@ async fn insert_path<C>(
 where
     C: GenericClient + Sync,
 {
-    let references: Vec<String> = path.references.iter().map(StorePath::base_name).collect();
+    let references: Vec<&str> = path.references.iter().map(StorePath::base_name).collect();
     insert_nix_path()
         .bind(
             client,
             &cache.as_ref(),
             &path.store_path.hash().as_ref(),
-            &path.store_path.to_string(),
+            &path.store_path.name(),
             &references.as_slice(),
             &path.deriver.as_ref().map(StorePath::base_name),
             &path.system.as_deref(),

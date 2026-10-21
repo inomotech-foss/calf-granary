@@ -1,7 +1,7 @@
 CREATE TABLE nix_path (
     cache cache_name NOT NULL,
     key nix_hash_part NOT NULL,
-    store_path text NOT NULL,
+    name nix_path_name NOT NULL,
     refs nix_base_name[] NOT NULL CHECK (array_position(refs, NULL) IS NULL),
     deriver nix_base_name,
     system text CHECK (system <> ''),

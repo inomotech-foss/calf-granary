@@ -13,7 +13,7 @@ pub struct InsertNixPathParams<
 > {
     pub cache: T1,
     pub key: T2,
-    pub store_path: T3,
+    pub name: T3,
     pub refs: T5,
     pub deriver: Option<T6>,
     pub system: Option<T7>,
@@ -48,7 +48,7 @@ pub struct FindNixUploadParams<T1: crate::StringSql, T2: crate::StringSql> {
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct FindNixPath {
-    pub store_path: String,
+    pub name: String,
     pub refs: Vec<String>,
     pub deriver: Option<String>,
     pub system: Option<String>,
@@ -59,7 +59,7 @@ pub struct FindNixPath {
     pub file_size: Option<i64>,
 }
 pub struct FindNixPathBorrowed<'a> {
-    pub store_path: &'a str,
+    pub name: &'a str,
     pub refs: crate::ArrayIterator<'a, &'a str>,
     pub deriver: Option<&'a str>,
     pub system: Option<&'a str>,
@@ -72,7 +72,7 @@ pub struct FindNixPathBorrowed<'a> {
 impl<'a> From<FindNixPathBorrowed<'a>> for FindNixPath {
     fn from(
         FindNixPathBorrowed {
-            store_path,
+            name,
             refs,
             deriver,
             system,
@@ -84,7 +84,7 @@ impl<'a> From<FindNixPathBorrowed<'a>> for FindNixPath {
         }: FindNixPathBorrowed<'a>,
     ) -> Self {
         Self {
-            store_path: store_path.into(),
+            name: name.into(),
             refs: refs.map(|v| v.into()).collect(),
             deriver: deriver.map(|v| v.into()),
             system: system.map(|v| v.into()),
@@ -334,8 +334,8 @@ where
 pub struct InsertNixPathStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn insert_nix_path() -> InsertNixPathStmt {
     InsertNixPathStmt(
-        "INSERT INTO nix_path (cache, key, store_path, refs, deriver, system, ca) VALUES ( \
-         $1::text, $2::text, $3::text, $4::text[], $5::text, $6::text, $7::text )",
+        "INSERT INTO nix_path (cache, key, name, refs, deriver, system, ca) VALUES ( $1::text, \
+         $2::text, $3::text, $4::text[], $5::text, $6::text, $7::text )",
         None,
     )
 }
@@ -365,14 +365,14 @@ impl InsertNixPathStmt {
         client: &'c C,
         cache: &'a T1,
         key: &'a T2,
-        store_path: &'a T3,
+        name: &'a T3,
         refs: &'a T5,
         deriver: &'a Option<T6>,
         system: &'a Option<T7>,
         ca: &'a Option<T8>,
     ) -> Result<u64, tokio_postgres::Error> {
         client
-            .execute(self.0, &[cache, key, store_path, refs, deriver, system, ca])
+            .execute(self.0, &[cache, key, name, refs, deriver, system, ca])
             .await
     }
 }
@@ -410,7 +410,7 @@ impl<
             client,
             &params.cache,
             &params.key,
-            &params.store_path,
+            &params.name,
             &params.refs,
             &params.deriver,
             &params.system,
@@ -421,10 +421,10 @@ impl<
 pub struct FindNixPathStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn find_nix_path() -> FindNixPathStmt {
     FindNixPathStmt(
-        "SELECT nix_path.store_path, nix_path.refs, nix_path.deriver, nix_path.system, \
-         nix_path.ca, entry.blob_id, blob.hash, blob.size, blob_zstd_size(blob.id) AS file_size \
-         FROM nix_path JOIN entry USING (cache, key) JOIN blob ON blob.id = entry.blob_id WHERE \
-         nix_path.cache = $1::text AND nix_path.key = $2::text",
+        "SELECT nix_path.name, nix_path.refs, nix_path.deriver, nix_path.system, nix_path.ca, \
+         entry.blob_id, blob.hash, blob.size, blob_zstd_size(blob.id) AS file_size FROM nix_path \
+         JOIN entry USING (cache, key) JOIN blob ON blob.id = entry.blob_id WHERE nix_path.cache \
+         = $1::text AND nix_path.key = $2::text",
         None,
     )
 }
@@ -450,7 +450,7 @@ impl FindNixPathStmt {
             extractor:
                 |row: &tokio_postgres::Row| -> Result<FindNixPathBorrowed, tokio_postgres::Error> {
                     Ok(FindNixPathBorrowed {
-                        store_path: row.try_get(0)?,
+                        name: row.try_get(0)?,
                         refs: row.try_get(1)?,
                         deriver: row.try_get(2)?,
                         system: row.try_get(3)?,

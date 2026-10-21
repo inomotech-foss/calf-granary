@@ -41,7 +41,7 @@ impl NarInfo {
     /// Renders the narinfo, signed with `key`.
     pub(crate) fn render(&self, key: &SigningKey) -> String {
         let path = &self.path;
-        let references: Vec<String> = path.references.iter().map(StorePath::base_name).collect();
+        let references: Vec<&str> = path.references.iter().map(StorePath::base_name).collect();
         let mut lines = vec![
             format!("StorePath: {}", path.store_path),
             format!("URL: {}", self.url),
@@ -94,7 +94,7 @@ impl UploadedNarInfo {
             let (name, value) = line.split_once(": ")?;
             fields.insert(name, value);
         }
-        let parse_path = |base_name: &str| StorePath::from_base_name(base_name).ok();
+        let parse_path = |base_name: &str| StorePath::from_base_name(base_name.to_owned()).ok();
         let references = match fields.get("References").copied().unwrap_or_default() {
             "" => Vec::new(),
             references => references
@@ -108,7 +108,7 @@ impl UploadedNarInfo {
         };
         Some(Self {
             path: PathInfo {
-                store_path: StorePath::try_from(*fields.get("StorePath")?).ok()?,
+                store_path: StorePath::try_from((*fields.get("StorePath")?).to_owned()).ok()?,
                 references,
                 deriver,
                 system: fields.get("System").map(ToString::to_string),
@@ -135,7 +135,7 @@ mod tests {
     use crate::nix::signing::tests::TEST_KEY;
 
     fn path(base_name: &str) -> StorePath {
-        StorePath::from_base_name(base_name).unwrap()
+        StorePath::from_base_name(base_name.to_owned()).unwrap()
     }
 
     fn info() -> NarInfo {

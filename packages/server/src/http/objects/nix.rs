@@ -56,16 +56,16 @@ struct UploadInfo {
 impl UploadInfo {
     /// Validates the metadata.
     fn into_path_info(self) -> Option<PathInfo> {
-        let parse = |path: &str| StorePath::try_from(path).ok();
+        let parse = |path: String| StorePath::try_from(path).ok();
         Some(PathInfo {
-            store_path: parse(&self.store_path)?,
+            store_path: parse(self.store_path)?,
             references: self
                 .references
-                .iter()
-                .map(|reference| parse(reference))
+                .into_iter()
+                .map(parse)
                 .collect::<Option<_>>()?,
             deriver: match self.deriver {
-                Some(deriver) => Some(parse(&deriver)?),
+                Some(deriver) => Some(parse(deriver)?),
                 None => None,
             },
             system: self.system,
