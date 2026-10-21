@@ -21,6 +21,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "task_notify",
         sql: include_str!("../migrations/0003_task_notify.sql"),
     },
+    Migration {
+        version: 4,
+        name: "content",
+        sql: include_str!("../migrations/0004_content.sql"),
+    },
 ];
 
 /// The advisory lock that serializes concurrent migration runs.
