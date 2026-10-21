@@ -4,6 +4,7 @@ use core::fmt;
 use core::str::FromStr;
 use core::time::Duration;
 
+use clap::Args;
 use jsonwebtoken::errors::Error as JwtError;
 use jsonwebtoken::{
     Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode, get_current_timestamp,
@@ -57,6 +58,29 @@ impl Grant {
     /// Checks whether the grant allows writing to the cache.
     pub(crate) fn allows(&self, cache: &str) -> bool {
         self.caches.iter().any(|allowed| allowed.as_ref() == cache)
+    }
+}
+
+/// Command-line arguments that provide the token secret.
+///
+/// The secret is checked after parsing, so that errors don't repeat it.
+#[derive(Args)]
+pub(crate) struct TokenSecretArgs {
+    /// Secret of at least 32 bytes that signs granary tokens.
+    #[arg(long, env = "GRANARY_TOKEN_SECRET", hide_env_values = true)]
+    token_secret: String,
+}
+
+impl TokenSecretArgs {
+    /// Creates the key from the secret.
+    pub(crate) fn key(&self) -> Result<TokenKey, ShortSecret> {
+        self.token_secret.parse()
+    }
+}
+
+impl fmt::Debug for TokenSecretArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("TokenSecretArgs(..)")
     }
 }
 

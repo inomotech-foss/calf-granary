@@ -18,7 +18,7 @@ use crate::config::{Config, ConfigError};
 use crate::database::DatabaseArgs;
 use crate::http;
 use crate::migrations::{self, MigrationError};
-use crate::token::TokenKey;
+use crate::token::{ShortSecret, TokenSecretArgs};
 
 /// Command-line arguments of the `serve` command.
 #[derive(Debug, Args)]
@@ -32,9 +32,9 @@ pub(crate) struct ServeArgs {
     /// Where to find Postgres.
     #[command(flatten)]
     database: DatabaseArgs,
-    /// Secret of at least 32 bytes that signs granary tokens.
-    #[arg(long, env = "GRANARY_TOKEN_SECRET", hide_env_values = true)]
-    token_secret: TokenKey,
+    /// The secret that signs granary tokens.
+    #[command(flatten)]
+    token: TokenSecretArgs,
 }
 
 impl ServeArgs {
@@ -42,9 +42,10 @@ impl ServeArgs {
     ///
     /// Refuses to start while migrations are pending.
     pub(crate) async fn run(self) -> Result<(), ServeError> {
+        let key = self.token.key()?;
         let config = Config::load(&self.config)?;
         let caches = config.caches()?;
-        let exchange = config.exchange(self.token_secret.clone())?;
+        let exchange = config.exchange(key.clone())?;
         let pool = self.database.pool().map_err(ServeError::Pool)?;
         let client = pool.get().await.map_err(ServeError::Connect)?;
         migrations::verify(&client).await?;
@@ -64,13 +65,7 @@ impl ServeArgs {
         let recorder = tokio::spawn(Arc::clone(&access).run(pool.clone(), stopped));
         let served = axum::serve(
             listener,
-            http::router(
-                pool,
-                Arc::new(caches),
-                access,
-                self.token_secret,
-                Arc::new(exchange),
-            ),
+            http::router(pool, Arc::new(caches), access, key, Arc::new(exchange)),
         )
         .with_graceful_shutdown(shutdown(terminate))
         .await;
@@ -113,6 +108,9 @@ pub(crate) enum ServeError {
     /// Installing the signal handler failed.
     #[error("failed to install the SIGTERM handler")]
     Signal(#[source] io::Error),
+    /// The token secret is too short.
+    #[error(transparent)]
+    TokenSecret(#[from] ShortSecret),
 }
 
 /// Resolves when the process receives SIGINT or SIGTERM.
