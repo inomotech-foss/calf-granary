@@ -8,48 +8,23 @@ use tokio_postgres::{Client, GenericClient, Transaction};
 const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
-        name: "access",
-        sql: include_str!("../migrations/0001_access.sql"),
+        name: "tasks",
+        sql: include_str!("../migrations/0001_tasks.sql"),
     },
     Migration {
         version: 2,
-        name: "tasks",
-        sql: include_str!("../migrations/0002_tasks.sql"),
+        name: "content",
+        sql: include_str!("../migrations/0002_content.sql"),
     },
     Migration {
         version: 3,
-        name: "task_notify",
-        sql: include_str!("../migrations/0003_task_notify.sql"),
+        name: "nix",
+        sql: include_str!("../migrations/0003_nix.sql"),
     },
     Migration {
         version: 4,
-        name: "content",
-        sql: include_str!("../migrations/0004_content.sql"),
-    },
-    Migration {
-        version: 5,
-        name: "collection",
-        sql: include_str!("../migrations/0005_collection.sql"),
-    },
-    Migration {
-        version: 6,
-        name: "nix",
-        sql: include_str!("../migrations/0006_nix.sql"),
-    },
-    Migration {
-        version: 7,
-        name: "nix_upload",
-        sql: include_str!("../migrations/0007_nix_upload.sql"),
-    },
-    Migration {
-        version: 8,
         name: "hashserv",
-        sql: include_str!("../migrations/0008_hashserv.sql"),
-    },
-    Migration {
-        version: 9,
-        name: "tier",
-        sql: include_str!("../migrations/0009_tier.sql"),
+        sql: include_str!("../migrations/0004_hashserv.sql"),
     },
 ];
 
