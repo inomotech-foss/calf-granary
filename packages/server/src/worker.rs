@@ -7,7 +7,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use calf_granary_server_db::queries::task::{
-    claim_task, complete_task, enqueue_due_schedules, fail_task, release_task, renew_lease,
+    claim_task, complete_task, enqueue_due_schedules, fail_task, next_deadline, release_task,
+    renew_lease,
 };
 use clap::Args;
 use deadpool_postgres::{BuildError, Pool, PoolError};
@@ -21,8 +22,14 @@ use crate::database::DatabaseArgs;
 use crate::migrations::{self, MigrationError};
 use crate::tasks::{Runner, TaskKind, WorkerId};
 
-/// How long the worker waits when no task is due.
-const POLL_INTERVAL: Duration = Duration::from_secs(15);
+/// How long the worker waits after a database error.
+const ERROR_DELAY: Duration = Duration::from_secs(15);
+
+/// The shortest wait between checks for due tasks.
+const MIN_IDLE: Duration = Duration::from_secs(1);
+
+/// The longest wait between checks for due tasks.
+const MAX_IDLE: Duration = Duration::from_mins(5);
 
 /// How long a claimed task stays with the worker without a renewal.
 const LEASE: Duration = Duration::from_mins(5);
@@ -77,15 +84,18 @@ impl WorkerArgs {
         };
         tracing::info!(worker = worker.id.as_ref(), "worker started");
         while !*stop.borrow() {
-            let ran = worker.step(&mut stop).await.unwrap_or_else(|err| {
+            let idle = match worker.step(&mut stop).await {
+                Ok(true) => continue,
+                Ok(false) => worker.idle_time().await,
+                Err(err) => Err(err),
+            }
+            .unwrap_or_else(|err| {
                 tracing::error!(error = &err as &dyn Error, "failed to run tasks");
-                false
+                ERROR_DELAY
             });
-            if !ran {
-                tokio::select! {
-                    () = time::sleep(POLL_INTERVAL) => {}
-                    _ = stop.changed() => {}
-                }
+            tokio::select! {
+                () = time::sleep(idle) => {}
+                _ = stop.changed() => {}
             }
         }
         Ok(())
@@ -185,6 +195,15 @@ impl Worker {
             }
         }
         Ok(true)
+    }
+
+    /// Returns how long to wait until a schedule, task or lease is due.
+    async fn idle_time(&self) -> Result<Duration, WorkerError> {
+        let client = self.pool.get().await.map_err(WorkerError::Connect)?;
+        let seconds = next_deadline().bind(&client).one().await?;
+        Ok(seconds
+            .and_then(|seconds| Duration::try_from_secs_f64(seconds.max(0.0)).ok())
+            .map_or(MAX_IDLE, |deadline| deadline.clamp(MIN_IDLE, MAX_IDLE)))
     }
 }
 

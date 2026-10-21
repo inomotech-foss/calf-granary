@@ -53,3 +53,10 @@ WHERE id = :id::bigint AND worker = :worker::text AND state = 'running';
 UPDATE task
 SET state = 'pending', attempts = attempts - 1, lease_expires_at = NULL
 WHERE id = :id::bigint AND worker = :worker::text AND state = 'running';
+
+--! next_deadline : (seconds?)
+SELECT extract(epoch FROM least(
+    (SELECT min(next_due) FROM schedule),
+    (SELECT min(due_at) FROM task WHERE state = 'pending'),
+    (SELECT min(lease_expires_at) FROM task WHERE state = 'running')
+) - now())::float8 AS seconds;
