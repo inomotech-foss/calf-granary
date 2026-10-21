@@ -1,14 +1,19 @@
 //! Background tasks recorded in Postgres.
 
+mod metrics;
+
 use core::error::Error as _;
 use core::str::FromStr;
 use std::sync::Arc;
+use std::time::Instant;
 use std::{env, process};
 
 use calf_granary_server_db::queries::prune::record_prune_run;
 use chrono::Utc;
 use deadpool_postgres::{Pool, PoolError};
+use tracing::Instrument as _;
 
+use self::metrics::TaskMetrics;
 use crate::cache::{CacheName, Caches, PruneError, PruneStats};
 
 /// A kind of task.
@@ -68,19 +73,29 @@ pub(crate) struct Runner {
     pool: Pool,
     /// The caches.
     caches: Arc<Caches>,
+    /// Records task runs.
+    metrics: TaskMetrics,
 }
 
 impl Runner {
     /// Creates a runner.
-    pub(crate) const fn new(pool: Pool, caches: Arc<Caches>) -> Self {
-        Self { pool, caches }
+    pub(crate) fn new(pool: Pool, caches: Arc<Caches>) -> Self {
+        Self {
+            pool,
+            caches,
+            metrics: TaskMetrics::new(),
+        }
     }
 
     /// Runs a task.
     pub(crate) async fn run(&self, id: i64, kind: TaskKind) -> Result<(), TaskError> {
-        match kind {
-            TaskKind::Prune => self.prune(id).await,
-        }
+        let span = tracing::info_span!("task", otel.name = kind.name(), task.id = id);
+        let start = Instant::now();
+        let result = match kind {
+            TaskKind::Prune => self.prune(id).instrument(span).await,
+        };
+        self.metrics.finished(kind, result.is_ok(), start.elapsed());
+        result
     }
 
     /// Prunes every cache and records what was deleted.
