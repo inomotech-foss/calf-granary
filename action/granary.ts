@@ -56,6 +56,19 @@ export async function exchange(server: string, idToken: string): Promise<Issued>
   return body;
 }
 
+/** Lists the caches that jobs without an ID token read from. */
+export async function anonymousCaches(server: string): Promise<CacheInfo[]> {
+  const response = await fetch(new URL("_api/caches", withSlash(server)));
+  if (!response.ok) {
+    throw new Error(`granary refused to list its caches with ${response.status}`);
+  }
+  const body: unknown = await response.json();
+  if (!isRecord(body) || !Array.isArray(body["caches"]) || !body["caches"].every(isCacheInfo)) {
+    throw new Error("granary answered with an unknown format");
+  }
+  return body["caches"];
+}
+
 /** Ensures a base URL ends with a slash, so relative URLs extend it. */
 function withSlash(url: string): string {
   return url.endsWith("/") ? url : `${url}/`;

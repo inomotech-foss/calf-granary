@@ -44,3 +44,10 @@ test("Nix substitutes with the cache's key and the token", () => {
     "machine g.example\nlogin granary\npassword secret\n",
   );
 });
+
+test("anonymous jobs read without credentials", () => {
+  const config = bitbakeConfig(caches);
+  assert.match(config, /^BB_HASHSERVE = "wss:/m);
+  assert.doesNotMatch(config, /BB_HASHSERVE_PASSWORD/);
+  assert.doesNotMatch(nixConfig(caches[3]!), /netrc-file/);
+});

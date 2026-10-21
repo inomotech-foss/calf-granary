@@ -79,6 +79,8 @@ async fn add_store_path(envs: &BTreeMap<String, String>, name: &str) -> String {
 fn config(forge: &str) -> String {
     format!(
         r#"
+anonymous_caches = ["sstate-pr", "nix-pr", "hash-pr"]
+
 [caches.sstate-pr]
 store = "test"
 role = "sstate"
@@ -241,5 +243,61 @@ async fn sets_up_and_fills_caches() {
             .status();
         assert_eq!(status, expected, "{reason}");
     }
+    assert!(server.stop().await.success(), "serve stops cleanly");
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres, object storage, Nix and Node"]
+async fn reads_anonymously_without_id_tokens() {
+    let forge = Forge::start().await;
+    let stack = Stack::new(&config(forge.url())).await;
+    stack.write("pr.key", KEY);
+    stack.migrate().await;
+    let server = stack.serve().await;
+    let dir = stack.dir();
+    for name in ["runner", "sstate", "downloads", "conf"] {
+        fs::create_dir_all(dir.join(name)).unwrap();
+    }
+    for name in ["env", "state", "output"] {
+        fs::write(dir.join(name), "").unwrap();
+    }
+    let mut envs = runner_env(&server.url(""), forge.url(), &dir);
+    envs.remove("ACTIONS_ID_TOKEN_REQUEST_URL");
+    envs.remove("ACTIONS_ID_TOKEN_REQUEST_TOKEN");
+
+    let log = step("main.ts", &envs).await;
+    assert!(
+        log.contains("reading the anonymous caches"),
+        "the job is warned: {log}"
+    );
+    let exported = file_commands(&dir.join("env"));
+    let nix_config = exported.get("NIX_CONFIG").cloned().unwrap_or_default();
+    assert!(
+        nix_config.contains(&server.url("nix-pr")),
+        "Nix substitutes: {nix_config}"
+    );
+    assert!(
+        !nix_config.contains("netrc-file"),
+        "without credentials: {nix_config}"
+    );
+    let bitbake = fs::read_to_string(dir.join("conf/auto.conf")).unwrap();
+    assert!(
+        bitbake.contains("SSTATE_MIRRORS"),
+        "BitBake reads sstate: {bitbake}"
+    );
+    assert!(
+        !bitbake.contains("PREMIRRORS"),
+        "downloads aren't anonymous here: {bitbake}"
+    );
+    assert!(
+        !bitbake.contains("PASSWORD"),
+        "without credentials: {bitbake}"
+    );
+
+    let post = step("post.ts", &envs).await;
+    assert!(
+        post.contains("nothing to upload"),
+        "nothing is uploaded: {post}"
+    );
     assert!(server.stop().await.success(), "serve stops cleanly");
 }
