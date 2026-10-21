@@ -7,6 +7,7 @@ use opentelemetry::metrics::Histogram;
 use opentelemetry::{KeyValue, global};
 use serde_json::{Value, json};
 
+use crate::cache::CacheName;
 use crate::telemetry::SCOPE;
 
 /// Upper bounds of the request duration buckets, in seconds.
@@ -63,7 +64,7 @@ impl Requests {
 #[derive(Debug)]
 pub(crate) struct HashservStats {
     /// The statistics by cache.
-    requests: Mutex<HashMap<String, Requests>>,
+    requests: Mutex<HashMap<CacheName, Requests>>,
     /// Request durations by cache and command.
     duration: Histogram<f64>,
 }
@@ -84,22 +85,27 @@ impl HashservStats {
     }
 
     /// Records a request.
-    pub(super) fn record(&self, cache: &str, command: &str, seconds: f64) {
-        self.lock()
-            .entry(cache.to_owned())
-            .or_default()
-            .add(seconds);
+    pub(super) fn record(&self, cache: &CacheName, command: &'static str, seconds: f64) {
+        let mut requests = self.lock();
+        if let Some(found) = requests.get_mut(cache) {
+            found.add(seconds);
+        } else {
+            let mut first = Requests::default();
+            first.add(seconds);
+            requests.insert(cache.clone(), first);
+        }
+        drop(requests);
         self.duration.record(
             seconds,
             &[
-                KeyValue::new("cache", cache.to_owned()),
-                KeyValue::new("command", command.to_owned()),
+                KeyValue::new("cache", cache.to_shared()),
+                KeyValue::new("command", command),
             ],
         );
     }
 
     /// The statistics of a cache.
-    pub(super) fn get(&self, cache: &str) -> Value {
+    pub(super) fn get(&self, cache: &CacheName) -> Value {
         self.lock()
             .get(cache)
             .copied()
@@ -108,12 +114,12 @@ impl HashservStats {
     }
 
     /// Resets the statistics of a cache and returns them as they were.
-    pub(super) fn reset(&self, cache: &str) -> Value {
+    pub(super) fn reset(&self, cache: &CacheName) -> Value {
         self.lock().remove(cache).unwrap_or_default().to_json()
     }
 
     /// Locks the statistics, also after a panic elsewhere.
-    fn lock(&self) -> MutexGuard<'_, HashMap<String, Requests>> {
+    fn lock(&self) -> MutexGuard<'_, HashMap<CacheName, Requests>> {
         self.requests.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
