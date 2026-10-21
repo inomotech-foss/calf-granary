@@ -12,9 +12,11 @@ rec {
 
   python = pkgs.python3.withPackages (packages: [ packages.websockets ]);
 
-  bitbakeExports = lib.concatStringsSep "\n" [
+  # Clients that the end-to-end tests drive the server with.
+  clientExports = lib.concatStringsSep "\n" [
     "export BITBAKE_ROOT=${bitbake}"
     "export BITBAKE_PYTHON=${lib.getExe python}"
+    "export GRANARY_NODE=${lib.getExe pkgs.nodejs_24}"
   ];
 
   curl = "${lib.getExe pkgs.curl} --fail --silent --show-error";

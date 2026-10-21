@@ -4,6 +4,10 @@
 //! with `source .dev/env && cargo nextest run --run-ignored only`.
 
 #[cfg(test)]
+mod action;
+#[cfg(test)]
+mod forge;
+#[cfg(test)]
 mod harness;
 #[cfg(test)]
 mod hashserv;

@@ -43,6 +43,7 @@ in
             || lib.any (suffix: lib.hasSuffix suffix path) [
               ".sql"
               ".py"
+              ".ts"
             ];
         };
         strictDeps = true;
