@@ -1,11 +1,10 @@
 //! Asking the local Nix installation about store paths.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::io;
 use std::process::Stdio;
 
 use serde::Deserialize;
-use serde_json::Value;
 use tokio::process::{Child, Command};
 
 /// What Nix knows about a store path, as `nix path-info --json` prints it.
@@ -30,12 +29,93 @@ pub(crate) enum NixError {
     /// Nix exited with an error.
     #[error("nix failed")]
     Failed,
-    /// Nix printed something other than path information.
-    #[error("failed to parse the output of nix path-info")]
+    /// Nix printed something unexpected.
+    #[error("failed to parse the output of nix")]
     Parse(#[source] serde_json::Error),
     /// Nix couldn't be started.
     #[error("failed to run nix")]
     Spawn(#[source] io::Error),
+}
+
+/// The systems of derivations, as `nix derivation show` prints them.
+#[derive(Debug, Default, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum Systems {
+    /// No derivations were shown.
+    #[default]
+    None,
+    /// Newer Nix nests the derivations and names them by base name.
+    Nested {
+        /// The derivations by base name.
+        derivations: BTreeMap<String, Derivation>,
+    },
+    /// Older Nix names the derivations by full path.
+    Flat(BTreeMap<String, Derivation>),
+}
+
+/// The part of a derivation that matters for pushing.
+#[derive(Debug, Deserialize)]
+pub(crate) struct Derivation {
+    /// The system that builds it.
+    system: String,
+}
+
+impl Systems {
+    /// Reads the systems of the derivations that are in the store.
+    ///
+    /// Derivations that aren't in the store, such as those of substituted
+    /// paths, are left out.
+    pub(crate) async fn read(derivations: &[&str]) -> Result<Self, NixError> {
+        if derivations.is_empty() {
+            return Ok(Self::None);
+        }
+        let invalid = Command::new("nix-store")
+            .args(["--check-validity", "--print-invalid", "--"])
+            .args(derivations)
+            .stderr(Stdio::inherit())
+            .output()
+            .await
+            .map_err(NixError::Spawn)?;
+        if !invalid.status.success() {
+            return Err(NixError::Failed);
+        }
+        let invalid = String::from_utf8_lossy(&invalid.stdout);
+        let invalid: HashSet<&str> = invalid.lines().collect();
+        let mut valid = derivations
+            .iter()
+            .filter(|derivation| !invalid.contains(*derivation))
+            .peekable();
+        if valid.peek().is_none() {
+            return Ok(Self::None);
+        }
+        let output = Command::new("nix")
+            .args([
+                "--extra-experimental-features",
+                "nix-command",
+                "derivation",
+                "show",
+                "--",
+            ])
+            .args(valid)
+            .stderr(Stdio::inherit())
+            .output()
+            .await
+            .map_err(NixError::Spawn)?;
+        if !output.status.success() {
+            return Err(NixError::Failed);
+        }
+        serde_json::from_slice(&output.stdout).map_err(NixError::Parse)
+    }
+
+    /// The system of a derivation, given as a full store path.
+    pub(crate) fn get(&self, deriver: &str) -> Option<&str> {
+        let derivation = match self {
+            Self::None => None,
+            Self::Nested { derivations } => derivations.get(deriver.rsplit('/').next()?),
+            Self::Flat(derivations) => derivations.get(deriver),
+        }?;
+        Some(&derivation.system)
+    }
 }
 
 /// Returns the store paths and everything they reference, by path.
@@ -58,73 +138,6 @@ pub(crate) async fn closure(paths: &[String]) -> Result<BTreeMap<String, PathInf
         return Err(NixError::Failed);
     }
     serde_json::from_slice(&output.stdout).map_err(NixError::Parse)
-}
-
-/// Returns the systems of the derivations that are in the store, by base
-/// name.
-///
-/// Derivations that aren't in the store, such as those of substituted paths,
-/// are left out.
-pub(crate) async fn systems(derivations: &[String]) -> Result<BTreeMap<String, String>, NixError> {
-    if derivations.is_empty() {
-        return Ok(BTreeMap::new());
-    }
-    let invalid = Command::new("nix-store")
-        .args(["--check-validity", "--print-invalid", "--"])
-        .args(derivations)
-        .stderr(Stdio::inherit())
-        .output()
-        .await
-        .map_err(NixError::Spawn)?;
-    if !invalid.status.success() {
-        return Err(NixError::Failed);
-    }
-    let invalid = String::from_utf8_lossy(&invalid.stdout);
-    let invalid: Vec<&str> = invalid.lines().collect();
-    let valid: Vec<&String> = derivations
-        .iter()
-        .filter(|derivation| !invalid.contains(&derivation.as_str()))
-        .collect();
-    if valid.is_empty() {
-        return Ok(BTreeMap::new());
-    }
-    let output = Command::new("nix")
-        .args([
-            "--extra-experimental-features",
-            "nix-command",
-            "derivation",
-            "show",
-            "--",
-        ])
-        .args(valid)
-        .stderr(Stdio::inherit())
-        .output()
-        .await
-        .map_err(NixError::Spawn)?;
-    if !output.status.success() {
-        return Err(NixError::Failed);
-    }
-    let shown: Value = serde_json::from_slice(&output.stdout).map_err(NixError::Parse)?;
-    Ok(derivation_systems(&shown))
-}
-
-/// Reads the systems from `nix derivation show` output, by base name.
-///
-/// Newer Nix nests the derivations under `derivations` and names them by
-/// base name, older Nix names them by full path.
-fn derivation_systems(shown: &Value) -> BTreeMap<String, String> {
-    let derivations = shown.get("derivations").unwrap_or(shown);
-    let Some(derivations) = derivations.as_object() else {
-        return BTreeMap::new();
-    };
-    derivations
-        .iter()
-        .filter_map(|(name, derivation)| {
-            let system = derivation.get("system")?.as_str()?;
-            let base_name = name.rsplit('/').next()?;
-            Some((base_name.to_owned(), system.to_owned()))
-        })
-        .collect()
 }
 
 /// Starts writing the NAR of a store path to the child's stdout.
@@ -179,26 +192,15 @@ mod tests {
 
     #[test]
     fn reads_derivation_systems() {
-        let newer = serde_json::json!({
-            "derivations": { "abc-hello.drv": { "system": "x86_64-linux" } },
-            "version": 4,
-        });
-        let older = serde_json::json!({
-            "/nix/store/abc-hello.drv": { "system": "aarch64-linux" },
-        });
-        assert_eq!(
-            derivation_systems(&newer)
-                .get("abc-hello.drv")
-                .map(String::as_str),
-            Some("x86_64-linux"),
-            "base names"
-        );
-        assert_eq!(
-            derivation_systems(&older)
-                .get("abc-hello.drv")
-                .map(String::as_str),
-            Some("aarch64-linux"),
-            "full paths"
-        );
+        let deriver = "/nix/store/abc-hello.drv";
+        let newer: Systems = serde_json::from_str(
+            r#"{"derivations": {"abc-hello.drv": {"system": "x86_64-linux"}}, "version": 4}"#,
+        )
+        .unwrap();
+        let older: Systems =
+            serde_json::from_str(r#"{"/nix/store/abc-hello.drv": {"system": "aarch64-linux"}}"#)
+                .unwrap();
+        assert_eq!(newer.get(deriver), Some("x86_64-linux"), "base names");
+        assert_eq!(older.get(deriver), Some("aarch64-linux"), "full paths");
     }
 }

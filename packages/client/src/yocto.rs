@@ -1,18 +1,19 @@
 //! Uploading Yocto shared state and downloads.
 
 use core::time::Duration;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{fs, io};
 
 use clap::{Args, Subcommand};
 use futures::{StreamExt as _, TryStreamExt as _, stream};
-use reqwest::{Body, Client, StatusCode, Url};
-use serde::Deserialize;
-use serde_json::json;
+use reqwest::{Body, Client, StatusCode};
+use serde::{Deserialize, Serialize};
 use tokio::fs::File;
 use tokio::task::{self, JoinError};
 use tokio_util::io::ReaderStream;
+use url::Url;
 
 use crate::target::Target;
 
@@ -74,6 +75,13 @@ impl Kind {
     }
 }
 
+/// The body of a missing-keys request.
+#[derive(Debug, Serialize)]
+struct MissingRequest<'a> {
+    /// The keys to ask about.
+    keys: &'a [&'a str],
+}
+
 /// The answer to a missing-keys request.
 #[derive(Debug, Deserialize)]
 struct Missing {
@@ -97,15 +105,14 @@ impl YoctoCommand {
             .map_err(FilesError::Task)?
             .map_err(FilesError::Walk)?;
         let http = Client::new();
-        let mut missing = Vec::new();
+        let cache = args.target.cache();
+        let missing_url = args.target.url(["_api", "files", cache, "missing"]);
+        let mut missing = HashSet::new();
         for batch in files.chunks(MISSING_BATCH) {
             let keys: Vec<&str> = batch.iter().map(|(key, _)| key.as_str()).collect();
             let answer: Missing = http
-                .post(
-                    args.target
-                        .url(&format!("_api/files/{}/missing", args.target.cache())),
-                )
-                .json(&json!({ "keys": keys }))
+                .post(missing_url.clone())
+                .json(&MissingRequest { keys: &keys })
                 .send()
                 .await
                 .and_then(reqwest::Response::error_for_status)
@@ -120,10 +127,11 @@ impl YoctoCommand {
             missing = missing.len(),
             "checked the cache"
         );
+        let base = args.target.url([cache]);
         let uploads = files
             .iter()
             .filter(|(key, _)| missing.contains(key))
-            .map(|(key, path)| upload(&http, &args.target, key, path));
+            .map(|(key, path)| upload(&http, &base, args.target.token(), key, path));
         stream::iter(uploads)
             .buffer_unordered(args.target.jobs())
             .try_collect::<Vec<()>>()
@@ -155,9 +163,6 @@ pub(crate) enum FilesError {
         /// The response status.
         status: StatusCode,
     },
-    /// The server URL is invalid.
-    #[error("the server URL is invalid")]
-    Server,
     /// Listing the files failed to run.
     #[error("the file listing failed")]
     Task(#[source] JoinError),
@@ -176,18 +181,26 @@ pub(crate) enum FilesError {
 }
 
 /// Uploads one file.
-async fn upload(http: &Client, target: &Target, key: &str, path: &Path) -> Result<(), FilesError> {
-    let mut url = Url::parse(&target.url(target.cache())).map_err(|_invalid| FilesError::Server)?;
-    url.path_segments_mut()
-        .map_err(|()| FilesError::Server)?
-        .extend(key.split('/'));
+///
+/// `base` is the URL of the cache.
+async fn upload(
+    http: &Client,
+    base: &Url,
+    token: &str,
+    key: &str,
+    path: &Path,
+) -> Result<(), FilesError> {
+    let mut url = base.clone();
+    if let Ok(mut segments) = url.path_segments_mut() {
+        segments.extend(key.split('/'));
+    }
     let file = File::open(path).await.map_err(|source| FilesError::Open {
         path: path.to_owned(),
         source,
     })?;
     let response = http
         .put(url)
-        .bearer_auth(target.token())
+        .bearer_auth(token)
         .body(Body::wrap_stream(ReaderStream::new(file)))
         .send()
         .await
@@ -223,17 +236,18 @@ fn collect(
                 continue;
             };
             let metadata = entry.metadata()?;
-            let key = format!("{prefix}{name}");
             if metadata.is_dir() {
                 if kind == Kind::Sstate {
-                    pending.push((entry.path(), format!("{key}/")));
+                    let mut key = format!("{prefix}{name}");
+                    key.push('/');
+                    pending.push((entry.path(), key));
                 }
                 continue;
             }
             let recent =
                 since.is_none_or(|since| metadata.modified().is_ok_and(|time| time >= since));
             if metadata.is_file() && recent && kind.wants(&name) {
-                files.push((key, entry.path()));
+                files.push((format!("{prefix}{name}"), entry.path()));
             }
         }
     }

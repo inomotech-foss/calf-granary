@@ -1,15 +1,15 @@
 //! The `nix push` command.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeSet, HashSet};
 
 use clap::Args;
 use futures::{StreamExt as _, TryStreamExt as _, stream};
 use reqwest::{Body, Client, StatusCode};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use tokio_util::io::ReaderStream;
+use url::Url;
 
-use crate::nix::{self, NixError, PathInfo};
+use crate::nix::{self, NixError, PathInfo, Systems};
 use crate::target::Target;
 
 /// The header that carries the metadata of an uploaded NAR.
@@ -52,28 +52,44 @@ struct UploadInfo<'a> {
     nar_size: u64,
 }
 
+/// The body of a missing-paths request.
+#[derive(Debug, Serialize)]
+struct MissingRequest<'a> {
+    /// The hash parts of the store paths to ask about.
+    hashes: &'a [&'a str],
+}
+
+/// Where and how to upload NARs.
+#[derive(Debug)]
+struct Uploader<'a> {
+    /// The HTTP client.
+    http: Client,
+    /// The upload endpoint.
+    url: Url,
+    /// The write token.
+    token: &'a str,
+    /// The systems of the derivations in the closure.
+    systems: Systems,
+}
+
 impl PushArgs {
     /// Uploads the closure of the paths, except what the cache has.
     pub(crate) async fn run(self) -> Result<(), PushError> {
         let closure = nix::closure(&self.paths).await?;
-        let derivations: Vec<String> = closure
+        let derivations: BTreeSet<&str> = closure
             .values()
-            .filter_map(|info| info.deriver.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
+            .filter_map(|info| info.deriver.as_deref())
             .collect();
-        let systems = nix::systems(&derivations).await?;
+        let derivations: Vec<&str> = derivations.into_iter().collect();
         let hashes: Vec<&str> = closure
             .keys()
             .filter_map(|path| nix::hash_part(path))
             .collect();
         let http = Client::new();
+        let cache = self.target.cache();
         let missing: Missing = http
-            .post(
-                self.target
-                    .url(&format!("_api/nix/{}/missing", self.target.cache())),
-            )
-            .json(&json!({ "hashes": hashes }))
+            .post(self.target.url(["_api", "nix", cache, "missing"]))
+            .json(&MissingRequest { hashes: &hashes })
             .send()
             .await
             .and_then(reqwest::Response::error_for_status)
@@ -86,38 +102,36 @@ impl PushArgs {
             missing = missing.missing.len(),
             "checked the cache"
         );
+        let missing: HashSet<&str> = missing.missing.iter().map(String::as_str).collect();
+        let uploader = Uploader {
+            http,
+            url: self.target.url(["_api", "nix", cache, "upload"]),
+            token: self.target.token(),
+            systems: Systems::read(&derivations).await?,
+        };
         let uploads = closure
             .iter()
-            .filter(|(path, _)| {
-                nix::hash_part(path).is_some_and(|hash| missing.missing.iter().any(|m| m == hash))
-            })
-            .map(|(path, info)| self.upload(&http, path, info, &systems));
+            .filter(|(path, _)| nix::hash_part(path).is_some_and(|hash| missing.contains(hash)))
+            .map(|(path, info)| uploader.upload(path, info));
         stream::iter(uploads)
             .buffer_unordered(self.target.jobs())
             .try_collect::<Vec<()>>()
             .await?;
         Ok(())
     }
+}
 
+impl Uploader<'_> {
     /// Uploads the NAR of one store path.
-    async fn upload(
-        &self,
-        http: &Client,
-        path: &str,
-        info: &PathInfo,
-        systems: &BTreeMap<String, String>,
-    ) -> Result<(), PushError> {
-        let system = info
-            .deriver
-            .as_deref()
-            .and_then(|deriver| deriver.rsplit('/').next())
-            .and_then(|base_name| systems.get(base_name))
-            .map(String::as_str);
+    async fn upload(&self, path: &str, info: &PathInfo) -> Result<(), PushError> {
         let metadata = UploadInfo {
             store_path: path,
             references: &info.references,
             deriver: info.deriver.as_deref(),
-            system,
+            system: info
+                .deriver
+                .as_deref()
+                .and_then(|deriver| self.systems.get(deriver)),
             ca: info.ca.as_deref(),
             nar_hash: &info.nar_hash,
             nar_size: info.nar_size,
@@ -125,12 +139,10 @@ impl PushArgs {
         let metadata = serde_json::to_string(&metadata).map_err(PushError::Metadata)?;
         let mut dump = nix::dump(path)?;
         let stdout = dump.stdout.take().ok_or(PushError::Dump)?;
-        let response = http
-            .put(
-                self.target
-                    .url(&format!("_api/nix/{}/upload", self.target.cache())),
-            )
-            .bearer_auth(self.target.token())
+        let response = self
+            .http
+            .put(self.url.clone())
+            .bearer_auth(self.token)
             .header(NAR_INFO_HEADER, metadata)
             .body(Body::wrap_stream(ReaderStream::new(stdout)))
             .send()
