@@ -1,17 +1,21 @@
 { lib, ... }:
 let
+  stores = {
+    long.bucket = "granary-long";
+    short.bucket = "granary-short";
+  };
   caches = {
     main = {
-      bucket = "granary-main";
+      store = "long";
       retention = "30d";
     };
     pr = {
-      bucket = "granary-pr";
+      store = "short";
       retention = "7d";
       fallback = "main";
     };
   };
-  buckets = lib.unique (lib.mapAttrsToList (_: cache: cache.bucket) caches) ++ [ "granary-test" ];
+  buckets = lib.mapAttrsToList (_: store: store.bucket) stores ++ [ "granary-test" ];
 in
 {
   ephemeris.gitignore.entries = [ "/.dev" ];
@@ -22,7 +26,7 @@ in
       server = lib.getExe' config.packages.calf-granary-server "calf-granary-server";
       services = import ./services.nix { inherit lib pkgs; };
       inherit (services) curl postgresql;
-      granaryConfig = (pkgs.formats.toml { }).generate "granary-dev.toml" { inherit caches; };
+      granaryConfig = (pkgs.formats.toml { }).generate "granary-dev.toml" { inherit stores caches; };
 
       postgres = pkgs.writeShellScript "granary-dev-postgres" ''
         data="$GRANARY_DEV_DIR/postgres"

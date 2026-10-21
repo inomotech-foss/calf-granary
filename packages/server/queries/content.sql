@@ -59,3 +59,37 @@ UPDATE entry
 SET last_access = greatest(last_access, now())
 FROM unnest(:keys::text[]) AS accessed (key)
 WHERE entry.cache = :cache::text AND entry.key = accessed.key;
+
+--! expire_entries
+DELETE FROM entry
+WHERE cache = :cache::text AND last_access < :cutoff::timestamptz;
+
+--! delete_orphan_blobs
+DELETE FROM blob
+WHERE touched_at < now() - make_interval(secs => :grace_seconds::float8)
+    AND NOT EXISTS (SELECT FROM entry WHERE entry.blob_id = blob.id);
+
+--! mark_orphan_chunks
+UPDATE chunk
+SET state = 'deleting'
+WHERE state = 'valid'
+    AND touched_at < now() - make_interval(secs => :grace_seconds::float8)
+    AND NOT EXISTS (SELECT FROM blob_chunk WHERE blob_chunk.chunk_id = chunk.id);
+
+--! deleting_chunks
+SELECT id, store, object_key, stored_size
+FROM chunk
+WHERE state = 'deleting' AND id > :after::bigint
+ORDER BY id
+LIMIT :limit::bigint;
+
+--! delete_chunks
+DELETE FROM chunk
+WHERE id = any(:ids::bigint[])
+    AND state = 'deleting'
+    AND NOT EXISTS (SELECT FROM blob_chunk WHERE blob_chunk.chunk_id = chunk.id);
+
+--! known_objects
+SELECT object_key
+FROM chunk
+WHERE store = :store::text AND object_key = any(:keys::text[]);

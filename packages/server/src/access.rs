@@ -10,12 +10,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
-use calf_granary_server_db::queries::access::record_accesses;
+use calf_granary_server_db::queries::content::record_entry_accesses;
 use deadpool_postgres::{Pool, PoolError};
 use tokio::sync::oneshot;
 use tokio::time::{self, MissedTickBehavior};
 
-use crate::cache::StoredObject;
+use crate::cache::{CacheName, ObjectKey};
 
 /// How often reads are written to Postgres.
 const FLUSH_INTERVAL: Duration = Duration::from_secs(60);
@@ -26,18 +26,27 @@ const RECORD_INTERVAL: Duration = Duration::from_hours(1);
 /// The most keys written by one query.
 const BATCH_SIZE: usize = 1000;
 
+/// An entry that was read.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct Accessed {
+    /// The cache of the entry.
+    pub(crate) cache: CacheName,
+    /// The key of the entry.
+    pub(crate) key: ObjectKey,
+}
+
 /// Reads that haven't been written to Postgres yet.
 #[derive(Debug, Default)]
 struct Accesses {
     /// Objects read since the last flush.
-    pending: HashSet<StoredObject>,
+    pending: HashSet<Accessed>,
     /// When objects were last written.
-    written: HashMap<StoredObject, Instant>,
+    written: HashMap<Accessed, Instant>,
 }
 
 impl Accesses {
     /// Records a read unless the object was written recently.
-    fn record(&mut self, object: StoredObject, now: Instant) {
+    fn record(&mut self, object: Accessed, now: Instant) {
         let recent = self
             .written
             .get(&object)
@@ -48,21 +57,21 @@ impl Accesses {
     }
 
     /// Takes the pending reads and forgets old writes.
-    fn take(&mut self, now: Instant) -> Vec<StoredObject> {
+    fn take(&mut self, now: Instant) -> Vec<Accessed> {
         self.written
             .retain(|_, written| now.duration_since(*written) < RECORD_INTERVAL);
         self.pending.drain().collect()
     }
 
     /// Notes that objects were written.
-    fn written(&mut self, objects: &[StoredObject], now: Instant) {
+    fn written(&mut self, objects: &[Accessed], now: Instant) {
         for object in objects {
             self.written.insert(object.clone(), now);
         }
     }
 
     /// Puts back reads that failed to be written.
-    fn restore(&mut self, objects: Vec<StoredObject>) {
+    fn restore(&mut self, objects: Vec<Accessed>) {
         self.pending.extend(objects);
     }
 }
@@ -76,7 +85,7 @@ pub(crate) struct AccessLog {
 
 impl AccessLog {
     /// Records that an object was read.
-    pub(crate) fn record(&self, object: StoredObject) {
+    pub(crate) fn record(&self, object: Accessed) {
         self.lock().record(object, Instant::now());
     }
 
@@ -119,14 +128,6 @@ impl AccessLog {
     }
 }
 
-#[cfg(test)]
-impl AccessLog {
-    /// Takes the pending reads.
-    pub(crate) fn take(&self) -> Vec<StoredObject> {
-        self.lock().take(Instant::now())
-    }
-}
-
 /// Errors from writing reads to Postgres.
 #[derive(Debug, thiserror::Error)]
 enum FlushError {
@@ -139,19 +140,19 @@ enum FlushError {
 }
 
 /// Writes reads to Postgres.
-async fn write(pool: &Pool, objects: &[StoredObject]) -> Result<(), FlushError> {
-    let mut buckets: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for object in objects {
-        buckets
-            .entry(&object.bucket)
+async fn write(pool: &Pool, entries: &[Accessed]) -> Result<(), FlushError> {
+    let mut caches: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for entry in entries {
+        caches
+            .entry(entry.cache.as_ref())
             .or_default()
-            .push(object.key.as_ref());
+            .push(entry.key.as_ref());
     }
     let client = pool.get().await?;
-    let statement = record_accesses();
-    for (bucket, keys) in buckets {
+    let statement = record_entry_accesses();
+    for (cache, keys) in caches {
         for batch in keys.chunks(BATCH_SIZE) {
-            statement.bind(&client, &bucket, &batch).await?;
+            statement.bind(&client, &batch, &cache).await?;
         }
     }
     Ok(())
@@ -159,14 +160,12 @@ async fn write(pool: &Pool, objects: &[StoredObject]) -> Result<(), FlushError> 
 
 #[cfg(test)]
 mod tests {
-    use object_store::path::Path;
-
     use super::*;
 
-    fn object(key: &str) -> StoredObject {
-        StoredObject {
-            bucket: "bucket".into(),
-            key: Path::from(key),
+    fn object(key: &str) -> Accessed {
+        Accessed {
+            cache: CacheName::try_from("main".to_owned()).unwrap(),
+            key: ObjectKey::try_from(key).unwrap(),
         }
     }
 

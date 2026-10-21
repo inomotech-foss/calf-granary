@@ -2,6 +2,8 @@
 
 use core::time::Duration;
 
+use object_store::path::Path;
+use object_store::{ObjectStoreExt as _, PutPayload};
 use reqwest::StatusCode;
 use reqwest::header::AUTHORIZATION;
 use tokio::time;
@@ -9,14 +11,14 @@ use tokio::time;
 use crate::harness::{Stack, text};
 
 const CACHES: &str = r#"
+collection_grace = "1s"
+
 [caches.short]
-bucket = "$bucket"
-prefix = "$prefix/short"
+store = "test"
 retention = "3s"
 
 [caches.kept]
-bucket = "$bucket"
-prefix = "$prefix/kept"
+store = "test"
 "#;
 
 #[tokio::test]
@@ -81,12 +83,68 @@ async fn prunes_unused_objects() {
     }
     assert!(restarted.stop().await.success(), "serve stops cleanly");
 
-    let runs = stack
-        .database()
-        .await
-        .query("SELECT cache, deleted FROM prune_run", &[])
+    let database = stack.database().await;
+    let expiries = database
+        .query("SELECT cache, expired FROM prune_expiry", &[])
         .await
         .unwrap();
-    let runs: Vec<(String, i64)> = runs.iter().map(|row| (row.get(0), row.get(1))).collect();
-    assert_eq!(runs, [("short".to_owned(), 1)], "the run is recorded");
+    let expiries: Vec<(String, i64)> = expiries
+        .iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect();
+    assert_eq!(
+        expiries,
+        [("short".to_owned(), 1)],
+        "the expiry is recorded"
+    );
+    let collection = database
+        .query_one(
+            "SELECT deleted_blobs, deleted_chunks FROM prune_collection",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (collection.get::<_, i64>(0), collection.get::<_, i64>(1)),
+        (1, 1),
+        "the content of the expired entry is collected"
+    );
+    let chunks: i64 = database
+        .query_one("SELECT count(*) FROM chunk", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(chunks, 2, "the content of the kept entries remains");
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres and object storage"]
+async fn sweeps_objects_without_chunks() {
+    let stack = Stack::new("collection_grace = \"1s\"\ncaches = {}").await;
+    stack.migrate().await;
+    let store = stack.store();
+    let orphan = Path::from("chunks/orphan");
+    store
+        .put(&orphan, PutPayload::from("orphan"))
+        .await
+        .unwrap();
+    time::sleep(Duration::from_secs(2)).await;
+
+    let output = stack.run(&["prune"]).await;
+    assert!(output.status.success(), "prune failed: {}", text(&output));
+    assert!(
+        matches!(
+            store.head(&orphan).await,
+            Err(object_store::Error::NotFound { path: _, source: _ })
+        ),
+        "the object is deleted"
+    );
+    let swept: i64 = stack
+        .database()
+        .await
+        .query_one("SELECT swept_objects FROM prune_collection", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(swept, 1, "the sweep is recorded");
 }

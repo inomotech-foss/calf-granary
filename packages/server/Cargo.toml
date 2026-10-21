@@ -11,6 +11,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+aws-lc-rs = { workspace = true, features = ["aws-lc-sys"] }
 axum = { workspace = true, features = [
   "http1",
   "json",
@@ -74,9 +75,7 @@ workspace = true
 features = ["ansi", "env-filter", "fmt", "registry", "std"]
 
 [dev-dependencies]
-aws-lc-rs = { workspace = true, features = ["aws-lc-sys"] }
 tokio = { workspace = true, features = ["process"] }
-tower = { workspace = true, features = ["util"] }
 
 [lints]
 workspace = true

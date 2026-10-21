@@ -8,6 +8,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{env, fs, process, thread};
 
+use object_store::aws::{AmazonS3, AmazonS3Builder};
+use object_store::prefix::PrefixStore;
 use reqwest::StatusCode;
 use rustls::crypto::aws_lc_rs;
 use rustls::{ClientConfig, RootCertStore};
@@ -18,6 +20,12 @@ use tokio::runtime::Builder;
 use tokio::time;
 use tokio_postgres::Client;
 use tokio_postgres_rustls::MakeRustlsConnect;
+
+/// A configuration without caches.
+pub(crate) const EMPTY: &str = "stores = {}\ncaches = {}";
+
+/// The store of every test, below the test's prefix.
+const STORE: &str = "[stores.test]\nbucket = \"$bucket\"\nprefix = \"$prefix\"\n";
 
 /// The binary under test.
 const SERVER: &str = env!("CARGO_BIN_EXE_calf-granary-server");
@@ -40,12 +48,12 @@ static COUNTER: AtomicU32 = AtomicU32::new(0);
 pub(crate) struct Stack {
     /// Names the database and the key prefix.
     id: String,
+    /// The bucket that holds the objects.
+    bucket: String,
     /// Connects to the database that creates and drops test databases.
     admin_url: String,
     /// Connects to the test database.
     database_url: String,
-    /// The bucket that holds the objects.
-    bucket: String,
     /// Holds the configuration file.
     dir: PathBuf,
 }
@@ -53,9 +61,9 @@ pub(crate) struct Stack {
 impl Stack {
     /// Creates the database and writes the configuration.
     ///
-    /// `$bucket` and `$prefix` in `caches` are replaced with the test's
-    /// bucket and unique prefix.
-    pub(crate) async fn new(caches: &str) -> Self {
+    /// Unless `config` defines stores, a store named `test` is added. `$bucket`
+    /// and `$prefix` are replaced with the test's bucket and unique prefix.
+    pub(crate) async fn new(config: &str) -> Self {
         let admin_url =
             env::var("GRANARY_DATABASE_URL").expect("GRANARY_DATABASE_URL locates Postgres");
         assert!(
@@ -84,7 +92,12 @@ impl Stack {
             .unwrap();
         let dir = env::temp_dir().join(format!("granary-{id}"));
         fs::create_dir_all(&dir).unwrap();
-        let config = caches.replace("$bucket", &bucket).replace("$prefix", &id);
+        let config = if config.contains("stores") {
+            config.to_owned()
+        } else {
+            format!("{config}\n{STORE}")
+        };
+        let config = config.replace("$bucket", &bucket).replace("$prefix", &id);
         fs::write(dir.join("config.toml"), config).unwrap();
         Self {
             database_url: format!("{admin_url} dbname={id}"),
@@ -95,14 +108,13 @@ impl Stack {
         }
     }
 
-    /// The bucket that holds the objects.
-    pub(crate) fn bucket(&self) -> &str {
-        &self.bucket
-    }
-
-    /// The full object key of a path below the test's prefix.
-    pub(crate) fn key(&self, path: &str) -> String {
-        format!("{}/{path}", self.id)
+    /// Opens the test's store directly.
+    pub(crate) fn store(&self) -> PrefixStore<AmazonS3> {
+        let store = AmazonS3Builder::from_env()
+            .with_bucket_name(&self.bucket)
+            .build()
+            .unwrap();
+        PrefixStore::new(store, self.id.as_str())
     }
 
     /// Connects to the test database.

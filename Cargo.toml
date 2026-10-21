@@ -41,7 +41,6 @@ tokio = { version = "1.54.0", default-features = false }
 tokio-postgres = { version = "0.7.18", default-features = false }
 tokio-postgres-rustls = { version = "0.14.0", default-features = false }
 toml = { version = "1.1.8", default-features = false }
-tower = { version = "0.5.3", default-features = false }
 tracing = { version = "0.1.44", default-features = false }
 tracing-opentelemetry = { version = "0.34.0", default-features = false }
 tracing-subscriber = { version = "0.3.23", default-features = false }

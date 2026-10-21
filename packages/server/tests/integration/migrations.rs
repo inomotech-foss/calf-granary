@@ -1,11 +1,11 @@
 //! Applying and verifying migrations.
 
-use crate::harness::{Stack, text};
+use crate::harness::{EMPTY, Stack, text};
 
 #[tokio::test]
 #[ignore = "needs Postgres and object storage"]
 async fn serve_refuses_pending_migrations() {
-    let stack = Stack::new("caches = {}").await;
+    let stack = Stack::new(EMPTY).await;
     let output = stack.run(&["serve"]).await;
     assert!(!output.status.success(), "serve refuses to start");
     assert!(
@@ -18,7 +18,7 @@ async fn serve_refuses_pending_migrations() {
 #[tokio::test]
 #[ignore = "needs Postgres and object storage"]
 async fn refuses_untrusted_database_servers() {
-    let stack = Stack::new("caches = {}").await;
+    let stack = Stack::new(EMPTY).await;
     let output = stack
         .command(&["migrate"])
         .env_remove("GRANARY_DATABASE_CA")
@@ -39,7 +39,7 @@ async fn refuses_untrusted_database_servers() {
 #[tokio::test]
 #[ignore = "needs Postgres and object storage"]
 async fn migrate_is_idempotent() {
-    let stack = Stack::new("caches = {}").await;
+    let stack = Stack::new(EMPTY).await;
     stack.migrate().await;
     let output = stack.run(&["migrate"]).await;
     assert!(output.status.success(), "the second run succeeds");

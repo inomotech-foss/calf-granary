@@ -8,13 +8,14 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::{env, process};
 
-use calf_granary_server_db::queries::prune::record_prune_run;
+use calf_granary_server_db::queries::prune::{record_prune_collection, record_prune_expiry};
 use chrono::Utc;
 use deadpool_postgres::{Pool, PoolError};
 use tracing::Instrument as _;
 
 use self::metrics::TaskMetrics;
-use crate::cache::{CacheName, Caches, PruneError, PruneStats};
+use crate::cache::{CacheName, Caches, ExpireError};
+use crate::content::{CollectError, CollectStats, Content};
 
 /// A kind of task.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,16 +74,19 @@ pub(crate) struct Runner {
     pool: Pool,
     /// The caches.
     caches: Arc<Caches>,
+    /// The content of the entries.
+    content: Arc<Content>,
     /// Records task runs.
     metrics: TaskMetrics,
 }
 
 impl Runner {
     /// Creates a runner.
-    pub(crate) fn new(pool: Pool, caches: Arc<Caches>) -> Self {
+    pub(crate) fn new(pool: Pool, caches: Arc<Caches>, content: Arc<Content>) -> Self {
         Self {
             pool,
             caches,
+            content,
             metrics: TaskMetrics::new(),
         }
     }
@@ -98,46 +102,55 @@ impl Runner {
         result
     }
 
-    /// Prunes every cache and records what was deleted.
+    /// Expires the entries of every cache, collects unreferenced content
+    /// and records what was deleted.
     async fn prune(&self, id: i64) -> Result<(), TaskError> {
         let client = self.pool.get().await?;
         let now = Utc::now();
+        let count = |value: u64| i64::try_from(value).unwrap_or(i64::MAX);
         for (name, cache) in self.caches.iter() {
-            let stats = cache
-                .prune(&client, now)
+            let expired = cache
+                .expire(&client, now)
                 .await
-                .map_err(|source| TaskError::Prune {
+                .map_err(|source| TaskError::Expire {
                     cache: name.clone(),
                     source,
                 })?;
-            let Some(stats) = stats else {
+            let Some(expired) = expired else {
                 continue;
             };
-            self.metrics.pruned(name, stats);
-            let PruneStats {
-                scanned,
-                deleted,
-                freed_bytes,
-            } = stats;
-            let count = |value: u64| i64::try_from(value).unwrap_or(i64::MAX);
-            record_prune_run()
-                .bind(
-                    &client,
-                    &id,
-                    &name.as_ref(),
-                    &count(scanned),
-                    &count(deleted),
-                    &count(freed_bytes),
-                )
+            self.metrics.expired(name, expired);
+            record_prune_expiry()
+                .bind(&client, &id, &name.as_ref(), &count(expired))
                 .await?;
-            tracing::info!(
-                cache = name.as_ref(),
-                scanned,
-                deleted,
-                freed_bytes,
-                "pruned a cache"
-            );
+            tracing::info!(cache = name.as_ref(), expired, "expired entries");
         }
+
+        let stats = self.content.collect(&client, now).await?;
+        self.metrics.collected(stats);
+        let CollectStats {
+            deleted_blobs,
+            deleted_chunks,
+            freed_bytes,
+            swept_objects,
+        } = stats;
+        record_prune_collection()
+            .bind(
+                &client,
+                &id,
+                &count(deleted_blobs),
+                &count(deleted_chunks),
+                &count(freed_bytes),
+                &count(swept_objects),
+            )
+            .await?;
+        tracing::info!(
+            deleted_blobs,
+            deleted_chunks,
+            freed_bytes,
+            swept_objects,
+            "collected unreferenced content"
+        );
         Ok(())
     }
 }
@@ -145,20 +158,23 @@ impl Runner {
 /// Errors from running a task.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum TaskError {
+    /// Collecting unreferenced content failed.
+    #[error("failed to collect unreferenced content")]
+    Collect(#[from] CollectError),
     /// Recording the task's results failed.
     #[error("failed to record the results")]
     Database(#[from] tokio_postgres::Error),
     /// No database connection was available.
     #[error("failed to get a database connection")]
     Pool(#[from] PoolError),
-    /// Pruning a cache failed.
-    #[error("failed to prune cache {cache}")]
-    Prune {
+    /// Expiring the entries of a cache failed.
+    #[error("failed to expire the entries of cache {cache}")]
+    Expire {
         /// The cache.
         cache: CacheName,
-        /// The error from pruning.
+        /// The error from expiring.
         #[source]
-        source: PruneError,
+        source: ExpireError,
     },
 }
 

@@ -211,7 +211,6 @@ dependencies = [
  "tokio-postgres",
  "tokio-postgres-rustls",
  "toml",
- "tower",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",

@@ -63,7 +63,9 @@ impl WorkerArgs {
     ///
     /// Refuses to start while migrations are pending.
     pub(crate) async fn run(self) -> Result<(), WorkerError> {
-        let caches = Config::load(&self.config)?.caches()?;
+        let config = Config::load(&self.config)?;
+        let caches = config.caches()?;
+        let content = config.content()?;
         let database = self.database.open()?;
         let pool = database.pool().map_err(WorkerError::Pool)?;
         let client = pool.get().await.map_err(WorkerError::Connect)?;
@@ -84,7 +86,7 @@ impl WorkerArgs {
         let wakeup = database.listen(TASK_CHANNEL);
         let worker = Worker {
             id: WorkerId::current(),
-            runner: Runner::new(pool.clone(), Arc::new(caches)),
+            runner: Runner::new(pool.clone(), Arc::new(caches), Arc::new(content)),
             pool,
         };
         tracing::info!(worker = worker.id.as_ref(), "worker started");

@@ -7,12 +7,10 @@ use crate::harness::{Server, Stack};
 
 const CACHES: &str = r#"
 [caches.main]
-bucket = "$bucket"
-prefix = "$prefix/main"
+store = "test"
 
 [caches.pr]
-bucket = "$bucket"
-prefix = "$prefix/pr"
+store = "test"
 fallback = "main"
 "#;
 
@@ -99,6 +97,18 @@ async fn uploads_and_reads_objects() {
         StatusCode::NOT_FOUND,
         "unknown caches"
     );
+    assert_eq!(
+        get(&server, "main/a//b").await.0,
+        StatusCode::BAD_REQUEST,
+        "invalid keys"
+    );
+    let pr_token = stack.token(&["pr"]).await;
+    put(&server, Some(&pr_token), "pr/only", b"only".to_vec()).await;
+    assert_eq!(
+        get(&server, "main/only").await.0,
+        StatusCode::NOT_FOUND,
+        "the fallback is one way"
+    );
     let head = server
         .http()
         .head(server.url("main/a/b"))
@@ -152,13 +162,50 @@ async fn records_reads_on_shutdown() {
     let rows = stack
         .database()
         .await
-        .query("SELECT bucket, key FROM access", &[])
+        .query(
+            "SELECT cache, key FROM entry WHERE last_access > created_at",
+            &[],
+        )
         .await
         .unwrap();
     let reads: Vec<(String, String)> = rows.iter().map(|row| (row.get(0), row.get(1))).collect();
     assert_eq!(
         reads,
-        [(stack.bucket().to_owned(), stack.key("main/a"))],
-        "the read is recorded for the object that served it"
+        [("main".to_owned(), "a".to_owned())],
+        "the read is recorded for the entry that served it"
     );
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres and object storage"]
+async fn stores_identical_content_once() {
+    let stack = Stack::new(CACHES).await;
+    stack.migrate().await;
+    let server = stack.serve().await;
+    let token = stack.token(&["main", "pr"]).await;
+    for path in ["main/a", "main/b", "pr/c"] {
+        assert_eq!(
+            put(&server, Some(&token), path, b"same".to_vec()).await,
+            StatusCode::CREATED,
+            "{path} is stored"
+        );
+    }
+    assert_eq!(
+        get(&server, "pr/c").await,
+        (StatusCode::OK, b"same".to_vec()),
+        "every entry serves the content"
+    );
+    assert!(server.stop().await.success(), "serve stops cleanly");
+
+    let database = stack.database().await;
+    let count = async |table: &str| -> i64 {
+        database
+            .query_one(&format!("SELECT count(*) FROM {table}"), &[])
+            .await
+            .unwrap()
+            .get(0)
+    };
+    assert_eq!(count("entry").await, 3, "every key has an entry");
+    assert_eq!(count("blob").await, 1, "the content is one blob");
+    assert_eq!(count("chunk").await, 1, "the content is one chunk");
 }

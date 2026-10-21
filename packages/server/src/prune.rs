@@ -27,7 +27,9 @@ pub(crate) struct PruneArgs {
 impl PruneArgs {
     /// Prunes every cache once and records the run as a task.
     pub(crate) async fn run(self) -> Result<(), PruneCommandError> {
-        let caches = Config::load(&self.config)?.caches()?;
+        let config = Config::load(&self.config)?;
+        let caches = config.caches()?;
+        let content = config.content()?;
         let pool = self
             .database
             .open()?
@@ -42,7 +44,9 @@ impl PruneArgs {
             .bind(&client, &kind.name(), &"cli", &worker.as_ref())
             .one()
             .await?;
-        let result = Runner::new(pool, Arc::new(caches)).run(id, kind).await;
+        let result = Runner::new(pool, Arc::new(caches), Arc::new(content))
+            .run(id, kind)
+            .await;
         match result {
             Ok(()) => {
                 complete_task().bind(&client, &id, &worker.as_ref()).await?;

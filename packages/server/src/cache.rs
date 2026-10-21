@@ -1,7 +1,4 @@
-//! Caches and the objects in them.
-
-mod prune;
-mod upload;
+//! Caches and the entries in them.
 
 use core::borrow::Borrow;
 use core::error::Error;
@@ -12,22 +9,16 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use futures::{Stream, StreamExt as _};
-use object_store::path::{Path, PathPart};
-use object_store::{
-    GetOptions, GetResult, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, WriteMultipart,
+use calf_granary_server_db::queries::content::{
+    entry_exists, expire_entries, find_entry, insert_entry,
 };
+use chrono::{DateTime, FixedOffset, TimeDelta, Utc};
+use deadpool_postgres::{Client, Pool, PoolError};
+use futures::Stream;
 use serde::{Deserialize, Serialize};
 
-pub(crate) use self::prune::{PruneError, PruneStats};
-use self::upload::Upload;
-
-/// The size of the parts of multipart uploads. Smaller objects are uploaded
-/// in one request.
-const PART_SIZE: usize = 8 * 1024 * 1024;
-
-/// How many parts of one object are uploaded at the same time.
-const PART_CONCURRENCY: usize = 4;
+use crate::content::{Content, WriteError};
+use crate::store::StoreName;
 
 /// The name of a cache.
 ///
@@ -87,11 +78,17 @@ pub(crate) struct InvalidCacheName {
     name: String,
 }
 
-/// The key of an object within a cache.
+/// The key of an entry within a cache.
 ///
 /// Keys are `/`-separated paths without empty, `.` or `..` segments.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ObjectKey(Path);
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ObjectKey(String);
+
+impl AsRef<str> for ObjectKey {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
 
 impl TryFrom<&str> for ObjectKey {
     type Error = InvalidObjectKey;
@@ -102,7 +99,7 @@ impl TryFrom<&str> for ObjectKey {
                 .split('/')
                 .all(|segment| !matches!(segment, "" | "." | ".."));
         if valid {
-            Ok(Self(key.split('/').map(PathPart::from).collect()))
+            Ok(Self(key.to_owned()))
         } else {
             Err(InvalidObjectKey {
                 key: key.to_owned(),
@@ -111,7 +108,7 @@ impl TryFrom<&str> for ObjectKey {
     }
 }
 
-/// An object key with empty, `.` or `..` segments.
+/// A key that isn't a valid entry key.
 #[derive(Debug, thiserror::Error)]
 #[error("invalid object key {key:?}")]
 pub(crate) struct InvalidObjectKey {
@@ -119,25 +116,21 @@ pub(crate) struct InvalidObjectKey {
     key: String,
 }
 
-/// An object identified by its bucket and its full key in the bucket.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct StoredObject {
-    /// The bucket.
-    pub(crate) bucket: Arc<str>,
-    /// The key in the bucket, including the cache's prefix.
-    pub(crate) key: Path,
-}
-
-/// An object found in a cache.
-#[derive(Debug)]
+/// An entry found in a cache.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Hit {
-    /// Where the object was found.
-    pub(crate) object: StoredObject,
-    /// Whether the fallback cache had the object.
+    /// The cache that had the entry.
+    pub(crate) cache: CacheName,
+    /// Whether that is the fallback cache.
     pub(crate) fallback: bool,
-    /// The object's metadata and, unless only the metadata was requested,
-    /// its content.
-    pub(crate) result: GetResult,
+    /// The blob with the content.
+    pub(crate) blob_id: i64,
+    /// The SHA-256 of the content.
+    pub(crate) hash: Vec<u8>,
+    /// The size of the content in bytes.
+    pub(crate) size: u64,
+    /// When the entry was created.
+    pub(crate) created_at: DateTime<FixedOffset>,
 }
 
 /// What storing an object did.
@@ -152,165 +145,150 @@ pub(crate) enum Stored {
     Existing,
 }
 
-/// A cache backed by object storage.
+/// A cache: a namespace of entries with a retention.
 #[derive(Debug)]
 pub(crate) struct Cache {
-    /// The bucket that holds the objects.
-    bucket: Arc<str>,
-    /// The key prefix of the objects in the bucket.
-    prefix: Path,
-    /// How long objects are kept after they were last read or written.
-    /// Objects are kept forever without it.
+    /// The name.
+    name: CacheName,
+    /// The store that new chunks go to.
+    store: StoreName,
+    /// How long entries are kept after they were last read or written.
     retention: Option<Duration>,
-    /// The bucket, limited to the prefix.
-    store: Arc<dyn ObjectStore>,
-    /// The cache to read from when an object is missing here.
+    /// The cache to read from when an entry is missing.
     fallback: Option<Arc<Self>>,
 }
 
 impl Cache {
     /// Creates a cache.
-    ///
-    /// The store must already be limited to `prefix`.
     pub(crate) const fn new(
-        bucket: Arc<str>,
-        prefix: Path,
+        name: CacheName,
+        store: StoreName,
         retention: Option<Duration>,
-        store: Arc<dyn ObjectStore>,
         fallback: Option<Arc<Self>>,
     ) -> Self {
         Self {
-            bucket,
-            prefix,
-            retention,
+            name,
             store,
+            retention,
             fallback,
         }
     }
 
-    /// Fetches an object, trying the fallback cache when it's missing here.
-    ///
-    /// With `head`, only the metadata is fetched. Returns `None` if neither
-    /// cache has the object.
+    /// Looks up an entry, trying the fallback cache when it's missing here.
     pub(crate) async fn get(
         &self,
+        client: &Client,
         key: &ObjectKey,
-        head: bool,
-    ) -> Result<Option<Hit>, object_store::Error> {
-        if let Some(hit) = self.get_here(key, head).await? {
+    ) -> Result<Option<Hit>, tokio_postgres::Error> {
+        if let Some(hit) = self.get_here(client, key, false).await? {
             return Ok(Some(hit));
         }
         match &self.fallback {
-            Some(fallback) => Ok(fallback.get_here(key, head).await?.map(|hit| Hit {
-                fallback: true,
-                ..hit
-            })),
+            Some(fallback) => fallback.get_here(client, key, true).await,
             None => Ok(None),
         }
     }
 
-    /// Fetches an object from this cache only.
+    /// Looks up an entry in this cache only.
     async fn get_here(
         &self,
+        client: &Client,
         key: &ObjectKey,
-        head: bool,
-    ) -> Result<Option<Hit>, object_store::Error> {
-        let options = GetOptions::new().with_head(head);
-        match self.store.get_opts(&key.0, options).await {
-            Ok(result) => Ok(Some(Hit {
-                object: self.object(key),
-                fallback: false,
-                result,
-            })),
-            Err(object_store::Error::NotFound { path: _, source: _ }) => Ok(None),
-            Err(err) => Err(err),
-        }
+        fallback: bool,
+    ) -> Result<Option<Hit>, tokio_postgres::Error> {
+        let entry = find_entry()
+            .bind(client, &self.name.as_ref(), &key.as_ref())
+            .opt()
+            .await?;
+        Ok(entry.map(|entry| Hit {
+            cache: self.name.clone(),
+            fallback,
+            blob_id: entry.blob_id,
+            hash: entry.hash,
+            size: u64::try_from(entry.size).unwrap_or_default(),
+            created_at: entry.created_at,
+        }))
     }
 
     /// Stores an object unless this cache already has it.
-    ///
-    /// Objects that fit in one part are uploaded in one request, larger ones
-    /// in parts. An unfinished multipart upload is aborted.
-    pub(crate) async fn put<S, E>(&self, key: &ObjectKey, mut body: S) -> Result<Stored, PutError>
+    pub(crate) async fn put<S, E>(
+        &self,
+        content: &Content,
+        pool: &Pool,
+        key: &ObjectKey,
+        body: S,
+    ) -> Result<Stored, PutError>
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin + Send,
         E: Error + Send + Sync + 'static,
     {
-        if self
-            .get_here(key, true)
-            .await
-            .map_err(PutError::Store)?
-            .is_some()
-        {
+        let exists = entry_exists()
+            .bind(&pool.get().await?, &self.name.as_ref(), &key.as_ref())
+            .one()
+            .await?;
+        if exists {
             return Ok(Stored::Existing);
         }
-        let mut parts = Vec::new();
-        let mut size = 0usize;
-        while size < PART_SIZE {
-            let Some(chunk) = body.next().await else {
-                let payload: PutPayload = parts.into_iter().collect();
-                self.store
-                    .put_opts(&key.0, payload, PutOptions::default())
-                    .await
-                    .map_err(PutError::Store)?;
-                return Ok(Stored::New {
-                    size: u64::try_from(size).unwrap_or(u64::MAX),
-                });
-            };
-            let chunk = chunk.map_err(|source| PutError::Body(Box::new(source)))?;
-            size = size.saturating_add(chunk.len());
-            parts.push(chunk);
-        }
-
-        let upload = self
-            .store
-            .put_multipart_opts(&key.0, PutMultipartOptions::default())
-            .await
-            .map_err(PutError::Store)?;
-        let mut upload = Upload::new(WriteMultipart::new_with_chunk_size(upload, PART_SIZE));
-        for part in parts {
-            upload
-                .put(part, PART_CONCURRENCY)
-                .await
-                .map_err(PutError::Store)?;
-        }
-        while let Some(chunk) = body.next().await {
-            let chunk = chunk.map_err(|source| PutError::Body(Box::new(source)))?;
-            size = size.saturating_add(chunk.len());
-            upload
-                .put(chunk, PART_CONCURRENCY)
-                .await
-                .map_err(PutError::Store)?;
-        }
-        upload.finish().await.map_err(PutError::Store)?;
-        Ok(Stored::New {
-            size: u64::try_from(size).unwrap_or(u64::MAX),
+        let blob = content.write(pool, &self.store, body).await?;
+        let mut client = pool.get().await?;
+        let transaction = client.transaction().await?;
+        let blob_id = content.commit(&transaction, &blob).await?;
+        let created = insert_entry()
+            .bind(&transaction, &self.name.as_ref(), &key.as_ref(), &blob_id)
+            .opt()
+            .await?;
+        transaction.commit().await?;
+        Ok(match created {
+            Some(_) => Stored::New { size: blob.size },
+            None => Stored::Existing,
         })
     }
 
-    /// Identifies an object of this cache in its bucket.
-    fn object(&self, key: &ObjectKey) -> StoredObject {
-        StoredObject {
-            bucket: Arc::clone(&self.bucket),
-            key: self.full_key(&key.0),
-        }
-    }
-
-    /// Prepends the prefix to a location in the store.
-    fn full_key(&self, location: &Path) -> Path {
-        self.prefix.parts().chain(location.parts()).collect()
+    /// Deletes entries that weren't read or written within the retention.
+    ///
+    /// Returns `None` for caches without a retention.
+    pub(crate) async fn expire(
+        &self,
+        client: &Client,
+        now: DateTime<Utc>,
+    ) -> Result<Option<u64>, ExpireError> {
+        let Some(retention) = self.retention else {
+            return Ok(None);
+        };
+        let cutoff = TimeDelta::from_std(retention)
+            .ok()
+            .and_then(|retention| now.checked_sub_signed(retention))
+            .ok_or(ExpireError::Retention)?;
+        let expired = expire_entries()
+            .bind(client, &self.name.as_ref(), &cutoff.fixed_offset())
+            .await?;
+        Ok(Some(expired))
     }
 }
 
 /// Errors from storing an object.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum PutError {
-    /// Reading the object from the client failed.
-    #[error("failed to read the object")]
-    Body(#[source] Box<dyn Error + Send + Sync>),
-    /// Object storage failed.
-    #[error("failed to store the object")]
-    Store(#[source] object_store::Error),
+    /// Getting a database connection failed.
+    #[error("failed to get a database connection")]
+    Connect(#[from] PoolError),
+    /// Recording the entry failed.
+    #[error("failed to record the entry")]
+    Database(#[from] tokio_postgres::Error),
+    /// Storing the content failed.
+    #[error(transparent)]
+    Write(#[from] WriteError),
+}
+
+/// Errors from expiring entries.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ExpireError {
+    /// Deleting the entries failed.
+    #[error("failed to delete the expired entries")]
+    Database(#[from] tokio_postgres::Error),
+    /// The retention reaches back further than timestamps can represent.
+    #[error("the retention is too long")]
+    Retention,
 }
 
 /// All caches by name.
@@ -361,14 +339,7 @@ mod tests {
              abcd_populate_sysroot.tar.zst",
         )
         .unwrap();
-        assert_eq!(key.0.parts().count(), 4, "segments are kept");
-
-        let encoded = ObjectKey::try_from("git2/foo~1.0%40bar.tar.gz").unwrap();
-        assert_eq!(
-            encoded.0.as_ref(),
-            "git2/foo%7E1.0%2540bar.tar.gz",
-            "unsafe characters are encoded"
-        );
+        assert_eq!(key.as_ref().split('/').count(), 4, "segments are kept");
 
         for invalid in ["", "/a", "a/", "a//b", "a/./b", "a/../b", ".."] {
             assert!(

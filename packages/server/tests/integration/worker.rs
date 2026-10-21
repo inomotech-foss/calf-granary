@@ -5,7 +5,7 @@ use core::time::Duration;
 use tokio::time;
 use tokio_postgres::Client;
 
-use crate::harness::{Stack, terminate};
+use crate::harness::{EMPTY, Stack, terminate};
 
 const WAIT: Duration = Duration::from_secs(5);
 
@@ -31,7 +31,7 @@ async fn wait_done(database: &Client, id: i64) {
 #[tokio::test]
 #[ignore = "needs Postgres and object storage"]
 async fn runs_scheduled_and_requested_tasks() {
-    let stack = Stack::new("caches = {}").await;
+    let stack = Stack::new(EMPTY).await;
     stack.migrate().await;
     let database = stack.database().await;
     let mut worker = stack.worker();

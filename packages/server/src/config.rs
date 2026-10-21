@@ -14,11 +14,16 @@ use serde::Deserialize;
 use toml::de::Error as TomlError;
 
 use crate::cache::{Cache, CacheName, Caches};
+use crate::content::Content;
 use crate::duration::ConfigDuration;
 use crate::exchange::Exchange;
 use crate::oidc::{Issuer, IssuerConfig};
+use crate::store::{StoreName, Stores};
 use crate::tiers::Tiers;
 use crate::token::TokenKey;
+
+/// How long unreferenced content is kept unless configured.
+const DEFAULT_COLLECTION_GRACE: Duration = Duration::from_hours(24);
 
 /// How long issued tokens are valid unless configured.
 const DEFAULT_TOKEN_LIFETIME: Duration = Duration::from_hours(6);
@@ -33,6 +38,8 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Config {
+    /// The stores that hold chunk objects, by name.
+    stores: BTreeMap<StoreName, StoreConfig>,
     /// The caches by name.
     caches: BTreeMap<CacheName, CacheConfig>,
     /// The issuers whose ID tokens are accepted, by name.
@@ -43,6 +50,10 @@ pub(crate) struct Config {
     tiers: Tiers,
     /// How long issued tokens are valid, 6 hours by default.
     token_lifetime: Option<ConfigDuration>,
+    /// How long unreferenced chunks and blobs are kept, 24 hours by default.
+    ///
+    /// Uploads must finish within this time.
+    collection_grace: Option<ConfigDuration>,
 }
 
 impl Config {
@@ -58,18 +69,40 @@ impl Config {
         })
     }
 
-    /// Connects every cache to its bucket.
+    /// Connects every store to its bucket.
+    pub(crate) fn content(&self) -> Result<Content, ConfigError> {
+        let mut stores = BTreeMap::new();
+        for (name, store) in &self.stores {
+            stores.insert(name.clone(), store.connect(name)?);
+        }
+        let grace = self
+            .collection_grace
+            .map_or(DEFAULT_COLLECTION_GRACE, Into::into);
+        Ok(Content::new(Stores::new(stores), grace))
+    }
+
+    /// Sets up the caches.
     ///
-    /// Fails if a fallback names an unknown cache or a cache that has a
-    /// fallback itself.
+    /// Fails if a cache names an unknown store, or if a fallback names an
+    /// unknown cache or a cache that has a fallback itself.
     pub(crate) fn caches(&self) -> Result<Caches, ConfigError> {
+        if let Some((name, cache)) = self
+            .caches
+            .iter()
+            .find(|(_, cache)| !self.stores.contains_key(&cache.store))
+        {
+            return Err(ConfigError::Store {
+                cache: name.clone(),
+                store: cache.store.clone(),
+            });
+        }
         let mut caches = BTreeMap::new();
         for (name, cache) in self
             .caches
             .iter()
             .filter(|(_, cache)| cache.fallback.is_none())
         {
-            caches.insert(name.clone(), Arc::new(cache.connect(name, None)?));
+            caches.insert(name.clone(), Arc::new(cache.build(name, None)));
         }
         for (name, cache) in &self.caches {
             let Some(fallback) = &cache.fallback else {
@@ -82,7 +115,7 @@ impl Config {
                     cache: name.clone(),
                     fallback: fallback.clone(),
                 })?;
-            caches.insert(name.clone(), Arc::new(cache.connect(name, Some(fallback))?));
+            caches.insert(name.clone(), Arc::new(cache.build(name, Some(fallback))));
         }
         Ok(Caches::new(caches))
     }
@@ -119,47 +152,56 @@ impl Config {
     }
 }
 
-/// The configuration of one cache.
+/// The configuration of one store.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct CacheConfig {
+struct StoreConfig {
     /// The bucket that holds the objects.
     bucket: String,
     /// A key prefix within the bucket.
     prefix: Option<String>,
-    /// How long objects are kept after they were last read or written.
-    retention: Option<ConfigDuration>,
-    /// The cache to read from when an object is missing.
-    fallback: Option<CacheName>,
 }
 
-impl CacheConfig {
+impl StoreConfig {
     /// Creates the client for the bucket.
-    fn connect(
-        &self,
-        name: &CacheName,
-        fallback: Option<Arc<Cache>>,
-    ) -> Result<Cache, ConfigError> {
+    fn connect(&self, name: &StoreName) -> Result<Arc<dyn ObjectStore>, ConfigError> {
         let store = AmazonS3Builder::from_env()
             .with_bucket_name(&self.bucket)
             .build()
             .map_err(|source| ConfigError::Storage {
-                cache: name.clone(),
+                store: name.clone(),
                 source,
             })?;
-        let prefix = self.prefix.as_deref().map(Path::from).unwrap_or_default();
-        let store: Arc<dyn ObjectStore> = if prefix.as_ref().is_empty() {
-            Arc::new(store)
-        } else {
-            Arc::new(PrefixStore::new(store, prefix.clone()))
-        };
-        Ok(Cache::new(
-            self.bucket.as_str().into(),
-            prefix,
+        Ok(match self.prefix.as_deref() {
+            Some(prefix) if !prefix.is_empty() => {
+                Arc::new(PrefixStore::new(store, Path::from(prefix)))
+            }
+            _ => Arc::new(store),
+        })
+    }
+}
+
+/// The configuration of one cache.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CacheConfig {
+    /// The store that new chunks go to.
+    store: StoreName,
+    /// How long entries are kept after they were last read or written.
+    retention: Option<ConfigDuration>,
+    /// The cache to read from when an entry is missing.
+    fallback: Option<CacheName>,
+}
+
+impl CacheConfig {
+    /// Creates the cache.
+    fn build(&self, name: &CacheName, fallback: Option<Arc<Cache>>) -> Cache {
+        Cache::new(
+            name.clone(),
+            self.store.clone(),
             self.retention.map(Into::into),
-            store,
             fallback,
-        ))
+        )
     }
 }
 
@@ -195,6 +237,14 @@ pub(crate) enum ConfigError {
         #[source]
         source: io::Error,
     },
+    /// A cache names an unknown store.
+    #[error("cache {cache} names the unknown store {store}")]
+    Store {
+        /// The cache.
+        cache: CacheName,
+        /// The unknown store.
+        store: StoreName,
+    },
     /// A tier names an unknown cache.
     #[error("tier {tier} names the unknown cache {cache}")]
     TierCache {
@@ -204,10 +254,10 @@ pub(crate) enum ConfigError {
         cache: CacheName,
     },
     /// The object storage client can't be created.
-    #[error("failed to set up the storage of cache {cache}")]
+    #[error("failed to set up the store {store}")]
     Storage {
-        /// The cache.
-        cache: CacheName,
+        /// The store.
+        store: StoreName,
         /// The error from the storage client.
         #[source]
         source: object_store::Error,

@@ -49,6 +49,25 @@ pub struct RecordEntryAccessesParams<
     pub keys: T2,
     pub cache: T3,
 }
+#[derive(Debug)]
+pub struct ExpireEntriesParams<T1: crate::StringSql> {
+    pub cache: T1,
+    pub cutoff: chrono::DateTime<chrono::FixedOffset>,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct DeletingChunksParams {
+    pub after: i64,
+    pub limit: i64,
+}
+#[derive(Debug)]
+pub struct KnownObjectsParams<
+    T1: crate::StringSql,
+    T2: crate::StringSql,
+    T3: crate::ArraySql<Item = T2>,
+> {
+    pub store: T1,
+    pub keys: T3,
+}
 #[derive(Debug, Clone, PartialEq)]
 pub struct InsertChunk {
     pub id: i64,
@@ -128,6 +147,36 @@ impl<'a> From<BlobChunksBorrowed<'a>> for BlobChunks {
             object_key: object_key.into(),
             compression: compression.into(),
             size,
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeletingChunks {
+    pub id: i64,
+    pub store: String,
+    pub object_key: String,
+    pub stored_size: i64,
+}
+pub struct DeletingChunksBorrowed<'a> {
+    pub id: i64,
+    pub store: &'a str,
+    pub object_key: &'a str,
+    pub stored_size: i64,
+}
+impl<'a> From<DeletingChunksBorrowed<'a>> for DeletingChunks {
+    fn from(
+        DeletingChunksBorrowed {
+            id,
+            store,
+            object_key,
+            stored_size,
+        }: DeletingChunksBorrowed<'a>,
+    ) -> Self {
+        Self {
+            id,
+            store: store.into(),
+            object_key: object_key.into(),
+            stored_size,
         }
     }
 }
@@ -543,6 +592,137 @@ where
         mapper: fn(BlobChunksBorrowed) -> R,
     ) -> BlobChunksQuery<'c, 'a, 's, C, R, N> {
         BlobChunksQuery {
+            client: self.client,
+            params: self.params,
+            query: self.query,
+            cached: self.cached,
+            extractor: self.extractor,
+            mapper,
+        }
+    }
+    pub async fn one(self) -> Result<T, tokio_postgres::Error> {
+        let row =
+            crate::client::async_::one(self.client, self.query, &self.params, self.cached).await?;
+        Ok((self.mapper)((self.extractor)(&row)?))
+    }
+    pub async fn all(self) -> Result<Vec<T>, tokio_postgres::Error> {
+        self.iter().await?.try_collect().await
+    }
+    pub async fn opt(self) -> Result<Option<T>, tokio_postgres::Error> {
+        let opt_row =
+            crate::client::async_::opt(self.client, self.query, &self.params, self.cached).await?;
+        Ok(opt_row
+            .map(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+            .transpose()?)
+    }
+    pub async fn iter(
+        self,
+    ) -> Result<
+        impl futures::Stream<Item = Result<T, tokio_postgres::Error>> + 'c,
+        tokio_postgres::Error,
+    > {
+        let stream = crate::client::async_::raw(
+            self.client,
+            self.query,
+            crate::slice_iter(&self.params),
+            self.cached,
+        )
+        .await?;
+        let mapped = stream
+            .map(move |res| {
+                res.and_then(|row| {
+                    let extracted = (self.extractor)(&row)?;
+                    Ok((self.mapper)(extracted))
+                })
+            })
+            .into_stream();
+        Ok(mapped)
+    }
+}
+pub struct DeletingChunksQuery<'c, 'a, 's, C: GenericClient, T, const N: usize> {
+    client: &'c C,
+    params: [&'a (dyn postgres_types::ToSql + Sync); N],
+    query: &'static str,
+    cached: Option<&'s tokio_postgres::Statement>,
+    extractor: fn(&tokio_postgres::Row) -> Result<DeletingChunksBorrowed, tokio_postgres::Error>,
+    mapper: fn(DeletingChunksBorrowed) -> T,
+}
+impl<'c, 'a, 's, C, T: 'c, const N: usize> DeletingChunksQuery<'c, 'a, 's, C, T, N>
+where
+    C: GenericClient,
+{
+    pub fn map<R>(
+        self,
+        mapper: fn(DeletingChunksBorrowed) -> R,
+    ) -> DeletingChunksQuery<'c, 'a, 's, C, R, N> {
+        DeletingChunksQuery {
+            client: self.client,
+            params: self.params,
+            query: self.query,
+            cached: self.cached,
+            extractor: self.extractor,
+            mapper,
+        }
+    }
+    pub async fn one(self) -> Result<T, tokio_postgres::Error> {
+        let row =
+            crate::client::async_::one(self.client, self.query, &self.params, self.cached).await?;
+        Ok((self.mapper)((self.extractor)(&row)?))
+    }
+    pub async fn all(self) -> Result<Vec<T>, tokio_postgres::Error> {
+        self.iter().await?.try_collect().await
+    }
+    pub async fn opt(self) -> Result<Option<T>, tokio_postgres::Error> {
+        let opt_row =
+            crate::client::async_::opt(self.client, self.query, &self.params, self.cached).await?;
+        Ok(opt_row
+            .map(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+            .transpose()?)
+    }
+    pub async fn iter(
+        self,
+    ) -> Result<
+        impl futures::Stream<Item = Result<T, tokio_postgres::Error>> + 'c,
+        tokio_postgres::Error,
+    > {
+        let stream = crate::client::async_::raw(
+            self.client,
+            self.query,
+            crate::slice_iter(&self.params),
+            self.cached,
+        )
+        .await?;
+        let mapped = stream
+            .map(move |res| {
+                res.and_then(|row| {
+                    let extracted = (self.extractor)(&row)?;
+                    Ok((self.mapper)(extracted))
+                })
+            })
+            .into_stream();
+        Ok(mapped)
+    }
+}
+pub struct StringQuery<'c, 'a, 's, C: GenericClient, T, const N: usize> {
+    client: &'c C,
+    params: [&'a (dyn postgres_types::ToSql + Sync); N],
+    query: &'static str,
+    cached: Option<&'s tokio_postgres::Statement>,
+    extractor: fn(&tokio_postgres::Row) -> Result<&str, tokio_postgres::Error>,
+    mapper: fn(&str) -> T,
+}
+impl<'c, 'a, 's, C, T: 'c, const N: usize> StringQuery<'c, 'a, 's, C, T, N>
+where
+    C: GenericClient,
+{
+    pub fn map<R>(self, mapper: fn(&str) -> R) -> StringQuery<'c, 'a, 's, C, R, N> {
+        StringQuery {
             client: self.client,
             params: self.params,
             query: self.query,
@@ -1079,5 +1259,248 @@ impl<
         Box<dyn futures::Future<Output = Result<u64, tokio_postgres::Error>> + Send + 'a>,
     > {
         Box::pin(self.bind(client, &params.keys, &params.cache))
+    }
+}
+pub struct ExpireEntriesStmt(&'static str, Option<tokio_postgres::Statement>);
+pub fn expire_entries() -> ExpireEntriesStmt {
+    ExpireEntriesStmt(
+        "DELETE FROM entry WHERE cache = $1::text AND last_access < $2::timestamptz",
+        None,
+    )
+}
+impl ExpireEntriesStmt {
+    pub async fn prepare<'a, C: GenericClient>(
+        mut self,
+        client: &'a C,
+    ) -> Result<Self, tokio_postgres::Error> {
+        self.1 = Some(client.prepare(self.0).await?);
+        Ok(self)
+    }
+    pub async fn bind<'c, 'a, 's, C: GenericClient, T1: crate::StringSql>(
+        &'s self,
+        client: &'c C,
+        cache: &'a T1,
+        cutoff: &'a chrono::DateTime<chrono::FixedOffset>,
+    ) -> Result<u64, tokio_postgres::Error> {
+        client.execute(self.0, &[cache, cutoff]).await
+    }
+}
+impl<'a, C: GenericClient + Send + Sync, T1: crate::StringSql>
+    crate::client::async_::Params<
+        'a,
+        'a,
+        'a,
+        ExpireEntriesParams<T1>,
+        std::pin::Pin<
+            Box<dyn futures::Future<Output = Result<u64, tokio_postgres::Error>> + Send + 'a>,
+        >,
+        C,
+    > for ExpireEntriesStmt
+{
+    fn params(
+        &'a self,
+        client: &'a C,
+        params: &'a ExpireEntriesParams<T1>,
+    ) -> std::pin::Pin<
+        Box<dyn futures::Future<Output = Result<u64, tokio_postgres::Error>> + Send + 'a>,
+    > {
+        Box::pin(self.bind(client, &params.cache, &params.cutoff))
+    }
+}
+pub struct DeleteOrphanBlobsStmt(&'static str, Option<tokio_postgres::Statement>);
+pub fn delete_orphan_blobs() -> DeleteOrphanBlobsStmt {
+    DeleteOrphanBlobsStmt(
+        "DELETE FROM blob WHERE touched_at < now() - make_interval(secs => $1::float8) AND NOT \
+         EXISTS (SELECT FROM entry WHERE entry.blob_id = blob.id)",
+        None,
+    )
+}
+impl DeleteOrphanBlobsStmt {
+    pub async fn prepare<'a, C: GenericClient>(
+        mut self,
+        client: &'a C,
+    ) -> Result<Self, tokio_postgres::Error> {
+        self.1 = Some(client.prepare(self.0).await?);
+        Ok(self)
+    }
+    pub async fn bind<'c, 'a, 's, C: GenericClient>(
+        &'s self,
+        client: &'c C,
+        grace_seconds: &'a f64,
+    ) -> Result<u64, tokio_postgres::Error> {
+        client.execute(self.0, &[grace_seconds]).await
+    }
+}
+pub struct MarkOrphanChunksStmt(&'static str, Option<tokio_postgres::Statement>);
+pub fn mark_orphan_chunks() -> MarkOrphanChunksStmt {
+    MarkOrphanChunksStmt(
+        "UPDATE chunk SET state = 'deleting' WHERE state = 'valid' AND touched_at < now() - \
+         make_interval(secs => $1::float8) AND NOT EXISTS (SELECT FROM blob_chunk WHERE \
+         blob_chunk.chunk_id = chunk.id)",
+        None,
+    )
+}
+impl MarkOrphanChunksStmt {
+    pub async fn prepare<'a, C: GenericClient>(
+        mut self,
+        client: &'a C,
+    ) -> Result<Self, tokio_postgres::Error> {
+        self.1 = Some(client.prepare(self.0).await?);
+        Ok(self)
+    }
+    pub async fn bind<'c, 'a, 's, C: GenericClient>(
+        &'s self,
+        client: &'c C,
+        grace_seconds: &'a f64,
+    ) -> Result<u64, tokio_postgres::Error> {
+        client.execute(self.0, &[grace_seconds]).await
+    }
+}
+pub struct DeletingChunksStmt(&'static str, Option<tokio_postgres::Statement>);
+pub fn deleting_chunks() -> DeletingChunksStmt {
+    DeletingChunksStmt(
+        "SELECT id, store, object_key, stored_size FROM chunk WHERE state = 'deleting' AND id > \
+         $1::bigint ORDER BY id LIMIT $2::bigint",
+        None,
+    )
+}
+impl DeletingChunksStmt {
+    pub async fn prepare<'a, C: GenericClient>(
+        mut self,
+        client: &'a C,
+    ) -> Result<Self, tokio_postgres::Error> {
+        self.1 = Some(client.prepare(self.0).await?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient>(
+        &'s self,
+        client: &'c C,
+        after: &'a i64,
+        limit: &'a i64,
+    ) -> DeletingChunksQuery<'c, 'a, 's, C, DeletingChunks, 2> {
+        DeletingChunksQuery {
+            client,
+            params: [after, limit],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |
+                row: &tokio_postgres::Row,
+            | -> Result<DeletingChunksBorrowed, tokio_postgres::Error> {
+                Ok(DeletingChunksBorrowed {
+                    id: row.try_get(0)?,
+                    store: row.try_get(1)?,
+                    object_key: row.try_get(2)?,
+                    stored_size: row.try_get(3)?,
+                })
+            },
+            mapper: |it| DeletingChunks::from(it),
+        }
+    }
+}
+impl<'c, 'a, 's, C: GenericClient>
+    crate::client::async_::Params<
+        'c,
+        'a,
+        's,
+        DeletingChunksParams,
+        DeletingChunksQuery<'c, 'a, 's, C, DeletingChunks, 2>,
+        C,
+    > for DeletingChunksStmt
+{
+    fn params(
+        &'s self,
+        client: &'c C,
+        params: &'a DeletingChunksParams,
+    ) -> DeletingChunksQuery<'c, 'a, 's, C, DeletingChunks, 2> {
+        self.bind(client, &params.after, &params.limit)
+    }
+}
+pub struct DeleteChunksStmt(&'static str, Option<tokio_postgres::Statement>);
+pub fn delete_chunks() -> DeleteChunksStmt {
+    DeleteChunksStmt(
+        "DELETE FROM chunk WHERE id = any($1::bigint[]) AND state = 'deleting' AND NOT EXISTS \
+         (SELECT FROM blob_chunk WHERE blob_chunk.chunk_id = chunk.id)",
+        None,
+    )
+}
+impl DeleteChunksStmt {
+    pub async fn prepare<'a, C: GenericClient>(
+        mut self,
+        client: &'a C,
+    ) -> Result<Self, tokio_postgres::Error> {
+        self.1 = Some(client.prepare(self.0).await?);
+        Ok(self)
+    }
+    pub async fn bind<'c, 'a, 's, C: GenericClient, T1: crate::ArraySql<Item = i64>>(
+        &'s self,
+        client: &'c C,
+        ids: &'a T1,
+    ) -> Result<u64, tokio_postgres::Error> {
+        client.execute(self.0, &[ids]).await
+    }
+}
+pub struct KnownObjectsStmt(&'static str, Option<tokio_postgres::Statement>);
+pub fn known_objects() -> KnownObjectsStmt {
+    KnownObjectsStmt(
+        "SELECT object_key FROM chunk WHERE store = $1::text AND object_key = any($2::text[])",
+        None,
+    )
+}
+impl KnownObjectsStmt {
+    pub async fn prepare<'a, C: GenericClient>(
+        mut self,
+        client: &'a C,
+    ) -> Result<Self, tokio_postgres::Error> {
+        self.1 = Some(client.prepare(self.0).await?);
+        Ok(self)
+    }
+    pub fn bind<
+        'c,
+        'a,
+        's,
+        C: GenericClient,
+        T1: crate::StringSql,
+        T2: crate::StringSql,
+        T3: crate::ArraySql<Item = T2>,
+    >(
+        &'s self,
+        client: &'c C,
+        store: &'a T1,
+        keys: &'a T3,
+    ) -> StringQuery<'c, 'a, 's, C, String, 2> {
+        StringQuery {
+            client,
+            params: [store, keys],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |row| Ok(row.try_get(0)?),
+            mapper: |it| it.into(),
+        }
+    }
+}
+impl<
+    'c,
+    'a,
+    's,
+    C: GenericClient,
+    T1: crate::StringSql,
+    T2: crate::StringSql,
+    T3: crate::ArraySql<Item = T2>,
+>
+    crate::client::async_::Params<
+        'c,
+        'a,
+        's,
+        KnownObjectsParams<T1, T2, T3>,
+        StringQuery<'c, 'a, 's, C, String, 2>,
+        C,
+    > for KnownObjectsStmt
+{
+    fn params(
+        &'s self,
+        client: &'c C,
+        params: &'a KnownObjectsParams<T1, T2, T3>,
+    ) -> StringQuery<'c, 'a, 's, C, String, 2> {
+        self.bind(client, &params.store, &params.keys)
     }
 }

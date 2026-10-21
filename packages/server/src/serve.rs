@@ -45,6 +45,7 @@ impl ServeArgs {
         let key = self.token.key()?;
         let config = Config::load(&self.config)?;
         let caches = config.caches()?;
+        let content = config.content()?;
         let exchange = config.exchange(key.clone())?;
         let pool = self.database.open()?.pool().map_err(ServeError::Pool)?;
         let client = pool.get().await.map_err(ServeError::Connect)?;
@@ -65,7 +66,14 @@ impl ServeArgs {
         let recorder = tokio::spawn(Arc::clone(&access).run(pool.clone(), stopped));
         let served = axum::serve(
             listener,
-            http::router(pool, Arc::new(caches), access, key, Arc::new(exchange)),
+            http::router(
+                pool,
+                Arc::new(caches),
+                Arc::new(content),
+                access,
+                key,
+                Arc::new(exchange),
+            ),
         )
         .with_graceful_shutdown(shutdown(terminate))
         .await;
