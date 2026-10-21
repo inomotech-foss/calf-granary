@@ -6,9 +6,7 @@ use base64::engine::general_purpose::STANDARD;
 use super::base32;
 use super::store_path::StorePath;
 use crate::hex;
-
-/// The length of a SHA-256 hash.
-const SHA256_LEN: usize = 32;
+use crate::sha256::Sha256;
 
 /// The metadata of a store path that a cache keeps.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,41 +22,42 @@ pub(crate) struct PathInfo {
     /// The content address of content-addressed paths.
     pub(crate) ca: Option<String>,
     /// The SHA-256 of the uncompressed NAR.
-    pub(crate) nar_hash: Vec<u8>,
+    pub(crate) nar_hash: Sha256,
     /// The size of the uncompressed NAR.
     pub(crate) nar_size: u64,
 }
 
 /// Parses a SHA-256 hash as Nix prints it: `sha256:` with base32 or
 /// hexadecimal digits, or `sha256-` with base64.
-pub(crate) fn parse_sha256(text: &str) -> Option<Vec<u8>> {
-    let hash = if let Some(digits) = text.strip_prefix("sha256:") {
-        match digits.len() {
-            52 => base32::decode(digits, SHA256_LEN)?,
-            64 => hex::decode(digits)?,
-            _ => return None,
+pub(crate) fn parse_sha256(text: &str) -> Option<Sha256> {
+    if let Some(digits) = text.strip_prefix("sha256:") {
+        if let Some(bytes) = base32::decode::<32>(digits) {
+            return Some(bytes.into());
         }
-    } else {
-        STANDARD.decode(text.strip_prefix("sha256-")?).ok()?
-    };
-    (hash.len() == SHA256_LEN).then_some(hash)
+        let mut bytes = [0; 32];
+        hex::decode_into(digits, &mut bytes)?;
+        return Some(bytes.into());
+    }
+    let mut decoded = [0; 33];
+    let len = STANDARD
+        .decode_slice(text.strip_prefix("sha256-")?, &mut decoded)
+        .ok()?;
+    decoded.get(..len)?.try_into().ok()
 }
 
 #[cfg(test)]
 mod tests {
-    use aws_lc_rs::digest::{SHA256, digest};
-
     use super::*;
 
     #[test]
     fn parses_every_hash_format() {
-        let empty = digest(&SHA256, b"").as_ref().to_vec();
+        let empty = Sha256::of(b"");
         for text in [
             "sha256:0mdqa9w1p6cmli6976v4wi0sw9r4p5prkj7lzfd1877wk11c9c73",
             "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=",
         ] {
-            assert_eq!(parse_sha256(text), Some(empty.clone()), "{text}");
+            assert_eq!(parse_sha256(text), Some(empty), "{text}");
         }
     }
 

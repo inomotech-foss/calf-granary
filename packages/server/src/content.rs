@@ -22,7 +22,7 @@ pub(crate) use self::collect::{CollectError, CollectStats};
 pub(crate) use self::read::Encoding;
 pub(crate) use self::tier::{Placement, TierError, TierStats};
 pub(crate) use self::write::WriteError;
-use crate::hex;
+use crate::hex::Hex;
 use crate::store::{StoreName, Stores};
 
 /// The prefix of chunk objects within a store.
@@ -57,5 +57,5 @@ impl Content {
 fn new_object_key() -> Result<Path, Unspecified> {
     let mut random = [0u8; 16];
     rand::fill(&mut random)?;
-    Ok(Path::from_iter([CHUNK_PREFIX, &hex::encode(&random)]))
+    Ok(Path::from_iter([CHUNK_PREFIX, &Hex(&random).to_string()]))
 }

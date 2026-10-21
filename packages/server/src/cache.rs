@@ -24,6 +24,7 @@ pub(crate) use self::hashserv::{HashservError, Report, StoredReport};
 pub(crate) use self::nix::{NarCompression, NixPutError};
 use crate::content::{Content, WriteError};
 use crate::nix::SigningKey;
+use crate::sha256::{InvalidSha256, Sha256};
 use crate::store::StoreName;
 
 /// The name of a cache.
@@ -132,7 +133,7 @@ pub(crate) struct Hit {
     /// The blob with the content.
     pub(crate) blob_id: i64,
     /// The SHA-256 of the content.
-    pub(crate) hash: Vec<u8>,
+    pub(crate) hash: Sha256,
     /// The size of the content in bytes.
     pub(crate) size: u64,
     /// When the entry was created.
@@ -295,7 +296,7 @@ impl Cache {
         &self,
         client: &Client,
         key: &ObjectKey,
-    ) -> Result<Option<Hit>, tokio_postgres::Error> {
+    ) -> Result<Option<Hit>, LookupError> {
         if let Some(hit) = self.get_here(client, key, false).await? {
             return Ok(Some(hit));
         }
@@ -311,16 +312,19 @@ impl Cache {
         client: &Client,
         key: &ObjectKey,
         fallback: bool,
-    ) -> Result<Option<Hit>, tokio_postgres::Error> {
+    ) -> Result<Option<Hit>, LookupError> {
         let entry = find_entry()
             .bind(client, &self.name.as_ref(), &key.as_ref())
             .opt()
             .await?;
-        Ok(entry.map(|entry| Hit {
+        let Some(entry) = entry else {
+            return Ok(None);
+        };
+        Ok(Some(Hit {
             cache: self.name.clone(),
             fallback,
             blob_id: entry.blob_id,
-            hash: entry.hash,
+            hash: entry.hash.as_slice().try_into()?,
             size: u64::try_from(entry.size).unwrap_or_default(),
             created_at: entry.created_at,
         }))
@@ -387,6 +391,17 @@ impl Cache {
             .await?;
         Ok(Some(expired))
     }
+}
+
+/// Errors from looking up an entry.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum LookupError {
+    /// The lookup failed.
+    #[error("failed to look up the entry")]
+    Database(#[from] tokio_postgres::Error),
+    /// The database returned a content hash that isn't a SHA-256 digest.
+    #[error("the database returned an invalid content hash")]
+    Digest(#[from] InvalidSha256),
 }
 
 /// A cache that keeps no content.

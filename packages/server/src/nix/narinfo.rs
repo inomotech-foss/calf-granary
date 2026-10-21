@@ -6,6 +6,7 @@ use super::base32;
 use super::path_info::{PathInfo, parse_sha256};
 use super::signing::SigningKey;
 use super::store_path::StorePath;
+use crate::sha256::Sha256;
 
 /// A narinfo: a store path's metadata and where its NAR file is.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,7 +33,7 @@ impl NarInfo {
         format!(
             "1;{};sha256:{};{};{}",
             self.path.store_path,
-            base32::encode(&self.path.nar_hash),
+            base32::Base32(self.path.nar_hash.as_bytes()),
             self.path.nar_size,
             references.join(",")
         )
@@ -52,7 +53,7 @@ impl NarInfo {
         }
         lines.push(format!(
             "NarHash: sha256:{}",
-            base32::encode(&path.nar_hash)
+            base32::Base32(path.nar_hash.as_bytes())
         ));
         lines.push(format!("NarSize: {}", path.nar_size));
         lines.push(format!("References: {}", references.join(" ")));
@@ -81,7 +82,7 @@ pub(crate) struct UploadedNarInfo {
     /// Where the client uploaded the compressed NAR, relative to the cache.
     pub(crate) url: String,
     /// The SHA-256 of the compressed NAR file.
-    pub(crate) file_hash: Option<Vec<u8>>,
+    pub(crate) file_hash: Option<Sha256>,
     /// The size of the compressed NAR file.
     pub(crate) file_size: Option<u64>,
 }
@@ -149,7 +150,7 @@ mod tests {
                 deriver: Some(path("2mdqa9w1p6cmli6976v4wi0sw9r4p5pr-hello-2.12.drv")),
                 system: Some("x86_64-linux".to_owned()),
                 ca: None,
-                nar_hash: vec![0; 32],
+                nar_hash: Sha256::from([0; 32]),
                 nar_size: 120,
             },
             url: "nar/0mdqa9w1p6cmli6976v4wi0sw9r4p5pr.nar.zst".to_owned(),

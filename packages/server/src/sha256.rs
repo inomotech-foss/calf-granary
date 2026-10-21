@@ -3,8 +3,11 @@
 use core::fmt;
 use core::str::FromStr;
 
+use aws_lc_rs::digest::{self, SHA256};
 use serde::de::{self, Unexpected};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use crate::hex::{self, Hex};
 
 /// A SHA-256 digest.
 ///
@@ -13,6 +16,18 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub(crate) struct Sha256([u8; 32]);
 
 impl Sha256 {
+    /// The digest of `data`.
+    pub(crate) fn of(data: &[u8]) -> Self {
+        Self::from_digest(&digest::digest(&SHA256, data))
+    }
+
+    /// Takes the bytes of a SHA-256 digest.
+    fn from_digest(digest: &digest::Digest) -> Self {
+        let mut bytes = [0; 32];
+        bytes.copy_from_slice(digest.as_ref());
+        Self(bytes)
+    }
+
     /// The digest bytes.
     pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
@@ -35,31 +50,20 @@ impl TryFrom<&[u8]> for Sha256 {
 
 impl fmt::Display for Sha256 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for byte in self.0 {
-            write!(f, "{byte:02x}")?;
-        }
-        Ok(())
+        Hex(&self.0).fmt(f)
     }
 }
 
 impl FromStr for Sha256 {
     type Err = InvalidSha256;
 
+    /// Parses 64 lowercase hexadecimal digits.
     fn from_str(text: &str) -> Result<Self, Self::Err> {
-        let digit = |byte: u8| match byte {
-            b'0'..=b'9' => Some(byte.wrapping_sub(b'0')),
-            b'a'..=b'f' => Some(byte.wrapping_sub(b'a').wrapping_add(10)),
-            _ => None,
-        };
-        let text: &[u8; 64] = text
-            .as_bytes()
-            .try_into()
-            .map_err(|_length| InvalidSha256)?;
-        let mut bytes = [0; 32];
-        let (pairs, _rest) = text.as_chunks::<2>();
-        for (byte, [high, low]) in bytes.iter_mut().zip(pairs) {
-            *byte = (digit(*high).ok_or(InvalidSha256)? << 4) | digit(*low).ok_or(InvalidSha256)?;
+        if text.bytes().any(|byte| byte.is_ascii_uppercase()) {
+            return Err(InvalidSha256);
         }
+        let mut bytes = [0; 32];
+        hex::decode_into(text, &mut bytes).ok_or(InvalidSha256)?;
         Ok(Self(bytes))
     }
 }
@@ -89,6 +93,33 @@ impl<'de> Deserialize<'de> for Sha256 {
         }
 
         deserializer.deserialize_str(Visitor)
+    }
+}
+
+/// Computes a SHA-256 digest of data that arrives in parts.
+#[derive(Clone)]
+pub(crate) struct Hasher(digest::Context);
+
+impl Hasher {
+    /// Starts an empty digest.
+    pub(crate) fn new() -> Self {
+        Self(digest::Context::new(&SHA256))
+    }
+
+    /// Adds data.
+    pub(crate) fn update(&mut self, data: &[u8]) {
+        self.0.update(data);
+    }
+
+    /// Returns the digest of the data so far.
+    pub(crate) fn finish(self) -> Sha256 {
+        Sha256::from_digest(&self.0.finish())
+    }
+}
+
+impl fmt::Debug for Hasher {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Hasher").finish_non_exhaustive()
     }
 }
 

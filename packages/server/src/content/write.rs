@@ -4,7 +4,6 @@ use core::error::Error;
 use core::mem;
 use std::io;
 
-use aws_lc_rs::digest::{self, SHA256};
 use aws_lc_rs::error::Unspecified;
 use bytes::Bytes;
 use calf_granary_server_db::client::GenericClient;
@@ -25,6 +24,7 @@ use zstd::bulk;
 use super::chunker::Chunker;
 use super::upload::Upload;
 use super::{Content, ZSTD_LEVEL, new_object_key};
+use crate::sha256::{Hasher, Sha256};
 use crate::store::StoreName;
 
 /// The size of the parts of multipart uploads. Smaller objects are uploaded
@@ -41,7 +41,7 @@ const CHUNK_CONCURRENCY: usize = 8;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct NewBlob {
     /// The SHA-256 of the plain content.
-    hash: Vec<u8>,
+    hash: Sha256,
     /// The size of the plain content in bytes.
     pub(crate) size: u64,
     /// The chunk IDs in order.
@@ -50,7 +50,7 @@ pub(crate) struct NewBlob {
 
 impl NewBlob {
     /// The SHA-256 of the plain content.
-    pub(crate) fn hash(&self) -> &[u8] {
+    pub(crate) const fn hash(&self) -> &Sha256 {
         &self.hash
     }
 }
@@ -88,7 +88,7 @@ impl Content {
         let inserted = insert_chunk()
             .bind(
                 &client,
-                &hash.as_slice(),
+                &hash.as_bytes().as_slice(),
                 &stored_size,
                 &ChunkCompression::Plain,
                 &stored_size,
@@ -133,7 +133,7 @@ impl Content {
             .get(store.as_ref())
             .ok_or_else(|| WriteError::UnknownStore(store.clone()))?
             .as_ref();
-        let mut hash = digest::Context::new(&SHA256);
+        let mut hash = Hasher::new();
         let mut size = 0u64;
         let mut chunker = Chunker::default();
         let mut pending = FuturesOrdered::new();
@@ -162,7 +162,7 @@ impl Content {
             chunks.push(id?);
         }
         Ok(NewBlob {
-            hash: hash.finish().as_ref().to_vec(),
+            hash: hash.finish(),
             size,
             chunks,
         })
@@ -177,7 +177,7 @@ impl Content {
     {
         let size = i64::try_from(blob.size).map_err(|_overflow| WriteError::TooLarge)?;
         let row = insert_blob()
-            .bind(client, &blob.hash.as_slice(), &size)
+            .bind(client, &blob.hash.as_bytes().as_slice(), &size)
             .one()
             .await?;
         if row.inserted {
@@ -229,11 +229,11 @@ async fn store_chunk(
     store: &StoreName,
     chunk: Bytes,
 ) -> Result<i64, WriteError> {
-    let hash = digest::digest(&SHA256, &chunk).as_ref().to_vec();
+    let hash = Sha256::of(&chunk);
     let existing = touch_chunk()
         .bind(
             &pool.get().await.map_err(WriteError::Connect)?,
-            &hash.as_slice(),
+            &hash.as_bytes().as_slice(),
         )
         .opt()
         .await?;
@@ -255,7 +255,7 @@ async fn store_chunk(
         Ok(client) => insert_chunk()
             .bind(
                 &client,
-                &hash.as_slice(),
+                &hash.as_bytes().as_slice(),
                 &size,
                 &ChunkCompression::Zstd,
                 &stored_size,
@@ -288,12 +288,12 @@ pub(super) async fn upload<S, E>(
     objects: &dyn ObjectStore,
     key: &Path,
     mut body: S,
-) -> Result<(Vec<u8>, u64), WriteError>
+) -> Result<(Sha256, u64), WriteError>
 where
     S: Stream<Item = Result<Bytes, E>> + Unpin + Send,
     E: Error + Send + Sync + 'static,
 {
-    let mut hash = digest::Context::new(&SHA256);
+    let mut hash = Hasher::new();
     let mut size = 0u64;
     let mut next = async || -> Result<Option<Bytes>, WriteError> {
         let Some(chunk) = body.next().await else {
@@ -315,7 +315,7 @@ where
                 .await
                 .map_err(WriteError::Store)?;
             drop(next);
-            return Ok((hash.finish().as_ref().to_vec(), size));
+            return Ok((hash.finish(), size));
         };
         buffered = buffered.saturating_add(chunk.len());
         parts.push(chunk);
@@ -340,7 +340,7 @@ where
     }
     upload.finish().await.map_err(WriteError::Store)?;
     drop(next);
-    Ok((hash.finish().as_ref().to_vec(), size))
+    Ok((hash.finish(), size))
 }
 
 /// Deletes an object that no chunk references, logging failures.

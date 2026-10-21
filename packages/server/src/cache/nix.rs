@@ -5,7 +5,6 @@ use std::io;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use async_compression::tokio::bufread::{XzDecoder, ZstdDecoder};
-use aws_lc_rs::digest::{self, SHA256};
 use bytes::Bytes;
 use calf_granary_server_db::client::GenericClient;
 use calf_granary_server_db::queries::content::{entry_exists, insert_entry};
@@ -20,6 +19,7 @@ use tokio_util::io::{ReaderStream, StreamReader};
 use super::{Cache, CacheName, NoStore, ObjectKey, Stored};
 use crate::content::{Content, WriteError};
 use crate::nix::{InvalidStorePath, PathInfo, StorePath, StorePathHash, UploadedNarInfo};
+use crate::sha256::{Hasher, InvalidSha256};
 
 /// A store path found in a cache.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,7 +60,7 @@ impl Cache {
                 deriver: row.deriver.map(StorePath::from_base_name).transpose()?,
                 system: row.system,
                 ca: row.ca,
-                nar_hash: row.hash,
+                nar_hash: row.hash.as_slice().try_into()?,
                 nar_size: u64::try_from(row.size).unwrap_or_default(),
             };
             return Ok(Some(NixHit {
@@ -114,7 +114,7 @@ impl Cache {
             return Ok(Stored::Existing);
         }
         let blob = content.write_chunked(pool, self.store()?, body).await?;
-        if blob.hash() != info.nar_hash.as_slice() || blob.size != info.nar_size {
+        if blob.hash() != &info.nar_hash || blob.size != info.nar_size {
             return Err(NixPutError::Mismatch);
         }
         let mut client = pool.get().await?;
@@ -180,7 +180,7 @@ impl Cache {
         if exists {
             return Ok(Stored::Existing);
         }
-        let file = Arc::new(Mutex::new((digest::Context::new(&SHA256), 0u64)));
+        let file = Arc::new(Mutex::new((Hasher::new(), 0u64)));
         let counted = Arc::clone(&file);
         let raw = body
             .inspect_ok(move |bytes| {
@@ -208,7 +208,7 @@ impl Cache {
         let blob = content.write_chunked(pool, self.store()?, plain).await?;
         let (file_hash, file_size) = {
             let file = file.lock().unwrap_or_else(PoisonError::into_inner);
-            (file.0.clone().finish().as_ref().to_vec(), file.1)
+            (file.0.clone().finish(), file.1)
         };
         let file_size = i64::try_from(file_size).map_err(|_overflow| NixPutError::TooLarge)?;
 
@@ -227,7 +227,7 @@ impl Cache {
                 &transaction,
                 &self.name.as_ref(),
                 &key.as_ref(),
-                &file_hash.as_slice(),
+                &file_hash.as_bytes().as_slice(),
                 &file_size,
             )
             .await?;
@@ -252,12 +252,12 @@ impl Cache {
             .await?
             .ok_or(NixPutError::MissingNar)?;
         let path = &info.path;
-        let matches = upload.hash == path.nar_hash
+        let matches = upload.hash.as_slice() == path.nar_hash.as_bytes()
             && u64::try_from(upload.size).ok() == Some(path.nar_size)
             && info
                 .file_hash
                 .as_ref()
-                .is_none_or(|hash| *hash == upload.file_hash)
+                .is_none_or(|hash| hash.as_bytes() == upload.file_hash.as_slice())
             && info
                 .file_size
                 .is_none_or(|size| u64::try_from(upload.file_size).ok() == Some(size));
@@ -286,6 +286,9 @@ pub(crate) enum NixLookupError {
     /// The lookup failed.
     #[error("failed to look up the store path")]
     Database(#[from] tokio_postgres::Error),
+    /// A recorded NAR hash isn't a SHA-256 digest.
+    #[error("the database returned an invalid NAR hash")]
+    Digest(#[from] InvalidSha256),
     /// A recorded store path is invalid.
     #[error(transparent)]
     StorePath(#[from] InvalidStorePath),

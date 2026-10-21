@@ -23,7 +23,6 @@ use super::credential;
 use crate::access::{AccessLog, Accessed};
 use crate::cache::{Caches, Hit, ObjectKey, Protocol, PutError, Stored};
 use crate::content::{Content, Encoding, WriteError};
-use crate::hex;
 use crate::token::{Grant, TokenKey};
 
 /// The most keys one missing-keys request may ask about.
@@ -322,7 +321,7 @@ fn object_headers(hit: &Hit) -> HeaderMap {
     if let Ok(value) = HeaderValue::from_str(&last_modified) {
         headers.insert(LAST_MODIFIED, value);
     }
-    if let Ok(value) = HeaderValue::from_str(&format!("\"{}\"", hex::encode(&hit.hash))) {
+    if let Ok(value) = HeaderValue::from_str(&format!("\"{}\"", hit.hash)) {
         headers.insert(ETAG, value);
     }
     headers
