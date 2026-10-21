@@ -46,6 +46,7 @@ impl ServeArgs {
         let config = Config::load(&self.config)?;
         let caches = config.caches()?;
         let content = config.content()?;
+        let public_url = config.public_url().map(ToOwned::to_owned);
         let exchange = config.exchange(key.clone())?;
         let pool = self.database.open()?.pool().map_err(ServeError::Pool)?;
         let client = pool.get().await.map_err(ServeError::Connect)?;
@@ -73,6 +74,7 @@ impl ServeArgs {
                 access,
                 key,
                 Arc::new(exchange),
+                public_url,
             ),
         )
         .with_graceful_shutdown(shutdown(terminate))

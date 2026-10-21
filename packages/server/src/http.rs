@@ -31,10 +31,17 @@ pub(crate) fn router(
     access: Arc<AccessLog>,
     key: TokenKey,
     exchange: Arc<Exchange>,
+    public_url: Option<String>,
 ) -> Router {
     let observed = Router::new()
-        .merge(objects::router(caches, content, pool.clone(), access, key))
-        .merge(token::router(exchange))
+        .merge(objects::router(
+            Arc::clone(&caches),
+            content,
+            pool.clone(),
+            access,
+            key,
+        ))
+        .merge(token::router(exchange, caches, public_url))
         .route_layer(middleware::from_fn_with_state(
             RequestMetrics::new(),
             observe::observe,

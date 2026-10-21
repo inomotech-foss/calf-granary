@@ -8,11 +8,27 @@ let
     main = {
       store = "long";
       retention = "30d";
+      role = "sstate";
     };
     pr = {
       store = "short";
       retention = "7d";
+      role = "sstate";
       fallback = "main";
+    };
+    downloads = {
+      store = "long";
+      retention = "365d";
+      role = "downloads";
+    };
+    hash-main = {
+      protocol = "hashserv";
+      retention = "30d";
+    };
+    hash-pr = {
+      protocol = "hashserv";
+      retention = "7d";
+      fallback = "hash-main";
     };
     nix-main = {
       store = "long";

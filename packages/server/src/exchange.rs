@@ -6,7 +6,7 @@ use jsonwebtoken::dangerous::insecure_decode_claims;
 use jsonwebtoken::errors::Error as JwtError;
 use opentelemetry::metrics::Counter;
 use opentelemetry::{KeyValue, global};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::cache::CacheName;
@@ -23,16 +23,16 @@ struct Unverified {
 }
 
 /// A granary token and what it grants.
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub(crate) struct Issued {
     /// The granary token.
-    token: String,
+    pub(crate) token: String,
     /// When the token expires, in seconds since the Unix epoch.
-    expires_at: u64,
+    pub(crate) expires_at: u64,
     /// The tier that the ID token mapped to.
-    tier: String,
+    pub(crate) tier: String,
     /// The caches that the token may write to.
-    caches: Vec<CacheName>,
+    pub(crate) caches: Vec<CacheName>,
 }
 
 /// Exchanges ID tokens from trusted issuers for granary tokens.

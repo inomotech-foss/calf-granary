@@ -55,6 +55,12 @@ pub(crate) struct Config {
     tiers: Tiers,
     /// How long issued tokens are valid, 6 hours by default.
     token_lifetime: Option<ConfigDuration>,
+    /// The URL that clients reach the server at, such as
+    /// `https://granary.example.org`.
+    ///
+    /// Without it, `/token` derives URLs from the request's `Host` and
+    /// `X-Forwarded-Proto` headers.
+    public_url: Option<String>,
     /// How long unreferenced chunks and blobs are kept, 24 hours by default.
     ///
     /// Uploads must finish within this time.
@@ -135,6 +141,11 @@ impl Config {
         Ok(Caches::new(caches))
     }
 
+    /// The URL that clients reach the server at.
+    pub(crate) fn public_url(&self) -> Option<&str> {
+        self.public_url.as_deref()
+    }
+
     /// Sets up the token exchange.
     ///
     /// Fails if a tier names an unknown cache.
@@ -211,6 +222,10 @@ struct CacheConfig {
     /// The protocol that clients speak.
     #[serde(default)]
     protocol: ProtocolName,
+    /// What clients use the cache for, such as `sstate` or `downloads`.
+    ///
+    /// Defaults to the protocol name.
+    role: Option<String>,
     /// The Nix secret key that signs narinfos. Required for Nix caches.
     signing_key: Option<path::PathBuf>,
     /// The `Priority` in `nix-cache-info`. Lower numbers are preferred.
@@ -258,6 +273,7 @@ impl CacheConfig {
             chunking,
             self.retention.map(Into::into),
             protocol,
+            self.role.clone(),
             fallback,
         ))
     }

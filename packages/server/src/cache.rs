@@ -208,6 +208,8 @@ pub(crate) struct Cache {
     retention: Option<Duration>,
     /// The protocol that clients speak.
     protocol: Protocol,
+    /// What clients use the cache for.
+    role: Option<String>,
     /// The cache to read from when an entry is missing.
     fallback: Option<Arc<Self>>,
 }
@@ -220,6 +222,7 @@ impl Cache {
         chunking: bool,
         retention: Option<Duration>,
         protocol: Protocol,
+        role: Option<String>,
         fallback: Option<Arc<Self>>,
     ) -> Self {
         Self {
@@ -228,6 +231,7 @@ impl Cache {
             chunking,
             retention,
             protocol,
+            role,
             fallback,
         }
     }
@@ -240,6 +244,15 @@ impl Cache {
     /// The protocol that clients speak.
     pub(crate) const fn protocol(&self) -> &Protocol {
         &self.protocol
+    }
+
+    /// What clients use the cache for, the protocol name by default.
+    pub(crate) fn role(&self) -> &str {
+        self.role.as_deref().unwrap_or(match self.protocol {
+            Protocol::Files => "files",
+            Protocol::Nix(_) => "nix",
+            Protocol::Hashserv => "hashserv",
+        })
     }
 
     /// This cache and its fallback, in lookup order.
