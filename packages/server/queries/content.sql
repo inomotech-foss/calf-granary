@@ -9,7 +9,7 @@ INSERT INTO chunk (hash, size, compression, stored_size, store, object_key)
 VALUES (
     :hash::bytea,
     :size::bigint,
-    :compression::text,
+    :compression::chunk_compression,
     :stored_size::bigint,
     :store::text,
     :object_key::text

@@ -42,7 +42,7 @@ WHERE id = :id::bigint AND worker = :worker::text AND state = 'running';
 
 --! fail_task
 UPDATE task
-SET state = CASE WHEN attempts >= :max_attempts::integer THEN 'failed' ELSE 'pending' END,
+SET state = CASE WHEN attempts >= :max_attempts::integer THEN 'failed'::task_state ELSE 'pending'::task_state END,
     due_at = now() + make_interval(secs => :retry_seconds::float8),
     finished_at = CASE WHEN attempts >= :max_attempts::integer THEN now() END,
     lease_expires_at = NULL,

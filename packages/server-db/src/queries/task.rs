@@ -590,10 +590,10 @@ impl<'a, C: GenericClient + Send + Sync, T1: crate::StringSql>
 pub struct FailTaskStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn fail_task() -> FailTaskStmt {
     FailTaskStmt(
-        "UPDATE task SET state = CASE WHEN attempts >= $1::integer THEN 'failed' ELSE 'pending' \
-         END, due_at = now() + make_interval(secs => $2::float8), finished_at = CASE WHEN \
-         attempts >= $1::integer THEN now() END, lease_expires_at = NULL, failure = $3::text \
-         WHERE id = $4::bigint AND worker = $5::text AND state = 'running'",
+        "UPDATE task SET state = CASE WHEN attempts >= $1::integer THEN 'failed'::task_state ELSE \
+         'pending'::task_state END, due_at = now() + make_interval(secs => $2::float8), \
+         finished_at = CASE WHEN attempts >= $1::integer THEN now() END, lease_expires_at = NULL, \
+         failure = $3::text WHERE id = $4::bigint AND worker = $5::text AND state = 'running'",
         None,
     )
 }

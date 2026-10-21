@@ -1,18 +1,13 @@
 // This file was generated with `cornucopia`. Do not modify.
 
 #[derive(Debug)]
-pub struct InsertChunkParams<
-    T1: crate::BytesSql,
-    T2: crate::StringSql,
-    T3: crate::StringSql,
-    T4: crate::StringSql,
-> {
+pub struct InsertChunkParams<T1: crate::BytesSql, T2: crate::StringSql, T3: crate::StringSql> {
     pub hash: T1,
     pub size: i64,
-    pub compression: T2,
+    pub compression: crate::types::ChunkCompression,
     pub stored_size: i64,
-    pub store: T3,
-    pub object_key: T4,
+    pub store: T2,
+    pub object_key: T3,
 }
 #[derive(Debug)]
 pub struct InsertBlobParams<T1: crate::BytesSql> {
@@ -161,13 +156,13 @@ impl<'a> From<FindEntryBorrowed<'a>> for FindEntry {
 pub struct BlobChunks {
     pub store: String,
     pub object_key: String,
-    pub compression: String,
+    pub compression: crate::types::ChunkCompression,
     pub size: i64,
 }
 pub struct BlobChunksBorrowed<'a> {
     pub store: &'a str,
     pub object_key: &'a str,
-    pub compression: &'a str,
+    pub compression: crate::types::ChunkCompression,
     pub size: i64,
 }
 impl<'a> From<BlobChunksBorrowed<'a>> for BlobChunks {
@@ -182,7 +177,7 @@ impl<'a> From<BlobChunksBorrowed<'a>> for BlobChunks {
         Self {
             store: store.into(),
             object_key: object_key.into(),
-            compression: compression.into(),
+            compression,
             size,
         }
     }
@@ -1103,8 +1098,9 @@ pub struct InsertChunkStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn insert_chunk() -> InsertChunkStmt {
     InsertChunkStmt(
         "INSERT INTO chunk (hash, size, compression, stored_size, store, object_key) VALUES ( \
-         $1::bytea, $2::bigint, $3::text, $4::bigint, $5::text, $6::text ) ON CONFLICT (hash) \
-         WHERE state = 'valid' DO UPDATE SET touched_at = now() RETURNING id, object_key",
+         $1::bytea, $2::bigint, $3::chunk_compression, $4::bigint, $5::text, $6::text ) ON \
+         CONFLICT (hash) WHERE state = 'valid' DO UPDATE SET touched_at = now() RETURNING id, \
+         object_key",
         None,
     )
 }
@@ -1124,16 +1120,15 @@ impl InsertChunkStmt {
         T1: crate::BytesSql,
         T2: crate::StringSql,
         T3: crate::StringSql,
-        T4: crate::StringSql,
     >(
         &'s self,
         client: &'c C,
         hash: &'a T1,
         size: &'a i64,
-        compression: &'a T2,
+        compression: &'a crate::types::ChunkCompression,
         stored_size: &'a i64,
-        store: &'a T3,
-        object_key: &'a T4,
+        store: &'a T2,
+        object_key: &'a T3,
     ) -> InsertChunkQuery<'c, 'a, 's, C, InsertChunk, 6> {
         InsertChunkQuery {
             client,
@@ -1151,21 +1146,12 @@ impl InsertChunkStmt {
         }
     }
 }
-impl<
-    'c,
-    'a,
-    's,
-    C: GenericClient,
-    T1: crate::BytesSql,
-    T2: crate::StringSql,
-    T3: crate::StringSql,
-    T4: crate::StringSql,
->
+impl<'c, 'a, 's, C: GenericClient, T1: crate::BytesSql, T2: crate::StringSql, T3: crate::StringSql>
     crate::client::async_::Params<
         'c,
         'a,
         's,
-        InsertChunkParams<T1, T2, T3, T4>,
+        InsertChunkParams<T1, T2, T3>,
         InsertChunkQuery<'c, 'a, 's, C, InsertChunk, 6>,
         C,
     > for InsertChunkStmt
@@ -1173,7 +1159,7 @@ impl<
     fn params(
         &'s self,
         client: &'c C,
-        params: &'a InsertChunkParams<T1, T2, T3, T4>,
+        params: &'a InsertChunkParams<T1, T2, T3>,
     ) -> InsertChunkQuery<'c, 'a, 's, C, InsertChunk, 6> {
         self.bind(
             client,

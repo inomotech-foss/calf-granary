@@ -11,6 +11,7 @@ use calf_granary_server_db::client::GenericClient;
 use calf_granary_server_db::queries::content::{
     insert_blob, insert_blob_chunks, insert_chunk, touch_chunk,
 };
+use calf_granary_server_db::types::ChunkCompression;
 use deadpool_postgres::{Pool, PoolError};
 use futures::stream::FuturesOrdered;
 use futures::{Stream, StreamExt as _};
@@ -23,7 +24,7 @@ use zstd::bulk;
 
 use super::chunker::Chunker;
 use super::upload::Upload;
-use super::{Content, UNCOMPRESSED, ZSTD, ZSTD_LEVEL, new_object_key};
+use super::{Content, ZSTD_LEVEL, new_object_key};
 use crate::store::StoreName;
 
 /// The size of the parts of multipart uploads. Smaller objects are uploaded
@@ -89,7 +90,7 @@ impl Content {
                 &client,
                 &hash.as_slice(),
                 &stored_size,
-                &UNCOMPRESSED,
+                &ChunkCompression::Plain,
                 &stored_size,
                 &store.as_ref(),
                 &key.as_ref(),
@@ -256,7 +257,7 @@ async fn store_chunk(
                 &client,
                 &hash.as_slice(),
                 &size,
-                &ZSTD,
+                &ChunkCompression::Zstd,
                 &stored_size,
                 &store.as_ref(),
                 &key.as_ref(),

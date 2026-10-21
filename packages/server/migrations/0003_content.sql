@@ -2,11 +2,11 @@ CREATE TABLE chunk (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     hash sha256_digest NOT NULL,
     size byte_count NOT NULL,
-    compression text NOT NULL CHECK (compression IN ('none', 'zstd')),
+    compression chunk_compression NOT NULL,
     stored_size byte_count NOT NULL,
     store store_name NOT NULL,
     object_key chunk_key NOT NULL,
-    state text NOT NULL DEFAULT 'valid' CHECK (state IN ('valid', 'deleting')),
+    state chunk_state NOT NULL DEFAULT 'valid',
     touched_at timestamptz NOT NULL DEFAULT now(),
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (store, object_key)

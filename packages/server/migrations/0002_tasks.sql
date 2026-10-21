@@ -1,8 +1,13 @@
+CREATE TABLE task_kind (
+    name text PRIMARY KEY
+);
+
+INSERT INTO task_kind (name) VALUES ('prune'), ('tier');
+
 CREATE TABLE task (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    kind text NOT NULL,
-    state text NOT NULL DEFAULT 'pending'
-        CHECK (state IN ('pending', 'running', 'done', 'failed')),
+    kind text NOT NULL REFERENCES task_kind,
+    state task_state NOT NULL DEFAULT 'pending',
     requested_by text NOT NULL,
     due_at timestamptz NOT NULL DEFAULT now(),
     attempts integer NOT NULL DEFAULT 0,
@@ -28,7 +33,7 @@ FOR EACH ROW WHEN (NEW.state = 'pending')
 EXECUTE FUNCTION notify_task();
 
 CREATE TABLE schedule (
-    kind text PRIMARY KEY,
+    kind text PRIMARY KEY REFERENCES task_kind,
     every_seconds bigint NOT NULL CHECK (every_seconds > 0),
     next_due timestamptz NOT NULL DEFAULT now()
 );

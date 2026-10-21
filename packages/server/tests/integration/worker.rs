@@ -13,7 +13,7 @@ async fn wait_done(database: &Client, id: i64) {
     let done = async {
         loop {
             let state: String = database
-                .query_one("SELECT state FROM task WHERE id = $1", &[&id])
+                .query_one("SELECT state::text FROM task WHERE id = $1", &[&id])
                 .await
                 .unwrap()
                 .get(0);

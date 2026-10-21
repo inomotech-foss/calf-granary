@@ -27,3 +27,9 @@ CREATE DOMAIN nix_base_name AS text
 
 CREATE DOMAIN hashserv_method AS text
     CHECK (VALUE ~ '^\S+$');
+
+CREATE TYPE task_state AS ENUM ('pending', 'running', 'done', 'failed');
+
+CREATE TYPE chunk_state AS ENUM ('valid', 'deleting');
+
+CREATE TYPE chunk_compression AS ENUM ('plain', 'zstd');

@@ -6,6 +6,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use calf_granary_server_db::client::GenericClient;
 use calf_granary_server_db::queries::content::{blob_chunks, zstd_size};
+use calf_granary_server_db::types::ChunkCompression;
 use futures::stream::{self, BoxStream};
 use futures::{StreamExt as _, TryStreamExt as _};
 use object_store::path::Path;
@@ -13,7 +14,7 @@ use object_store::{ObjectStore, ObjectStoreExt as _};
 use tokio::task::{self, JoinError};
 use zstd::bulk;
 
-use super::{Content, UNCOMPRESSED, ZSTD, ZSTD_LEVEL};
+use super::{Content, ZSTD_LEVEL};
 
 /// How a blob's bytes are delivered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,14 +25,23 @@ pub(crate) enum Encoding {
     Zstd,
 }
 
+impl From<ChunkCompression> for Encoding {
+    fn from(compression: ChunkCompression) -> Self {
+        match compression {
+            ChunkCompression::Plain => Self::Plain,
+            ChunkCompression::Zstd => Self::Zstd,
+        }
+    }
+}
+
 /// A chunk to read.
 struct Part {
     /// The store that holds the object.
     store: Arc<dyn ObjectStore>,
     /// The object.
     key: Path,
-    /// Whether the object is a zstd frame rather than plain bytes.
-    compressed: bool,
+    /// How the object is stored.
+    stored: Encoding,
     /// The plain size in bytes.
     size: usize,
     /// How the chunk is delivered.
@@ -46,16 +56,13 @@ impl Part {
     /// small chunks shared between chunked and whole content.
     async fn open(self) -> Result<BoxStream<'static, Result<Bytes, ChunkError>>, ChunkError> {
         let object = self.store.get(&self.key).await.map_err(ChunkError::Store)?;
-        if self.compressed == (self.encoding == Encoding::Zstd) {
+        if self.stored == self.encoding {
             return Ok(object.into_stream().map_err(ChunkError::Store).boxed());
         }
         let stored = object.bytes().await.map_err(ChunkError::Store)?;
-        let converted = task::spawn_blocking(move || {
-            if self.compressed {
-                bulk::decompress(&stored, self.size)
-            } else {
-                bulk::compress(&stored, ZSTD_LEVEL)
-            }
+        let converted = task::spawn_blocking(move || match self.stored {
+            Encoding::Zstd => bulk::decompress(&stored, self.size),
+            Encoding::Plain => bulk::compress(&stored, ZSTD_LEVEL),
         })
         .await
         .map_err(ChunkError::Task)?
@@ -94,11 +101,6 @@ impl Content {
     {
         let mut parts = Vec::new();
         for chunk in blob_chunks().bind(client, &blob_id).all().await? {
-            let compressed = match chunk.compression.as_str() {
-                UNCOMPRESSED => false,
-                ZSTD => true,
-                _ => return Err(ReadError::Compression(chunk.compression)),
-            };
             let store = self
                 .stores
                 .get(&chunk.store)
@@ -106,7 +108,7 @@ impl Content {
             parts.push(Part {
                 store: Arc::clone(store),
                 key: Path::from(chunk.object_key),
-                compressed,
+                stored: chunk.compression.into(),
                 encoding,
                 size: usize::try_from(chunk.size).map_err(|_overflow| ReadError::TooLarge)?,
             });
@@ -118,9 +120,6 @@ impl Content {
 /// Errors from reading a blob's chunk list.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ReadError {
-    /// A chunk uses an unknown compression.
-    #[error("unknown chunk compression {0:?}")]
-    Compression(String),
     /// Looking up the chunks failed.
     #[error("failed to look up the chunks")]
     Database(#[from] tokio_postgres::Error),

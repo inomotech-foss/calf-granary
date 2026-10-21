@@ -28,12 +28,6 @@ use crate::store::{StoreName, Stores};
 /// The prefix of chunk objects within a store.
 const CHUNK_PREFIX: &str = "chunks";
 
-/// The compression of chunks stored as they are.
-const UNCOMPRESSED: &str = "none";
-
-/// The compression of chunks stored as one zstd frame each.
-const ZSTD: &str = "zstd";
-
 /// The zstd level of new chunks.
 const ZSTD_LEVEL: i32 = 8;
 

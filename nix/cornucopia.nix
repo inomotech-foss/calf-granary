@@ -81,6 +81,9 @@ in
             use-workspace-deps = "$root/Cargo.toml"
             wasm-features = false
 
+            [style]
+            enum-variant-camel-case = true
+
             [manifest.package]
             name = "${cfg.name}"
             description = "${cfg.description}"
