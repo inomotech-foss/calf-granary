@@ -21,42 +21,46 @@ pub(super) const MAX_SIZE: usize = 256 * 1024;
 pub(super) struct Chunker {
     /// Bytes that aren't part of a finished chunk yet.
     buffer: BytesMut,
+    /// The chunk lengths in the buffer, kept to reuse the allocation.
+    lengths: Vec<usize>,
 }
 
 impl Chunker {
-    /// Adds bytes and returns the chunks that are certain now.
+    /// Adds bytes and appends the chunks that are certain now to `out`.
     ///
     /// The last cut point in the buffer may still move when more bytes
     /// arrive, so the bytes after the second to last one are kept.
-    pub(super) fn push(&mut self, bytes: &[u8]) -> Vec<Bytes> {
+    pub(super) fn push(&mut self, bytes: &[u8], out: &mut Vec<Bytes>) {
         self.buffer.extend_from_slice(bytes);
         if self.buffer.len() < MAX_SIZE.saturating_mul(2) {
-            return Vec::new();
+            return;
         }
-        let mut lengths = self.lengths();
-        lengths.pop();
-        self.split(&lengths)
+        self.find_lengths();
+        self.lengths.pop();
+        self.split(out);
     }
 
-    /// Returns the remaining chunks.
-    pub(super) fn finish(mut self) -> Vec<Bytes> {
-        let lengths = self.lengths();
-        self.split(&lengths)
+    /// Appends the remaining chunks to `out`.
+    pub(super) fn finish(&mut self, out: &mut Vec<Bytes>) {
+        self.find_lengths();
+        self.split(out);
     }
 
-    /// The lengths of the chunks in the buffer.
-    fn lengths(&self) -> Vec<usize> {
-        FastCDC::new(&self.buffer, MIN_SIZE, AVG_SIZE, MAX_SIZE)
-            .map(|chunk| chunk.length)
-            .collect()
+    /// Finds the lengths of the chunks in the buffer.
+    fn find_lengths(&mut self) {
+        self.lengths.clear();
+        self.lengths.extend(
+            FastCDC::new(&self.buffer, MIN_SIZE, AVG_SIZE, MAX_SIZE).map(|chunk| chunk.length),
+        );
     }
 
-    /// Takes chunks of the given lengths from the front of the buffer.
-    fn split(&mut self, lengths: &[usize]) -> Vec<Bytes> {
-        lengths
-            .iter()
-            .map(|length| self.buffer.split_to(*length).freeze())
-            .collect()
+    /// Takes chunks of the found lengths from the front of the buffer.
+    fn split(&mut self, out: &mut Vec<Bytes>) {
+        out.extend(
+            self.lengths
+                .drain(..)
+                .map(|length| self.buffer.split_to(length).freeze()),
+        );
     }
 }
 
@@ -82,9 +86,9 @@ mod tests {
         let mut chunker = Chunker::default();
         let mut chunks = Vec::new();
         for part in bytes.chunks(piece) {
-            chunks.extend(chunker.push(part));
+            chunker.push(part, &mut chunks);
         }
-        chunks.extend(chunker.finish());
+        chunker.finish(&mut chunks);
         chunks
     }
 

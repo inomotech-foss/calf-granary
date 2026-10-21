@@ -12,9 +12,8 @@ use futures::{StreamExt as _, TryStreamExt as _};
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt as _};
 use tokio::task::{self, JoinError};
-use zstd::bulk;
 
-use super::{Content, ZSTD_LEVEL};
+use super::{Content, zstd};
 
 /// How a blob's bytes are delivered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,8 +60,8 @@ impl Part {
         }
         let stored = object.bytes().await.map_err(ChunkError::Store)?;
         let converted = task::spawn_blocking(move || match self.stored {
-            Encoding::Zstd => bulk::decompress(&stored, self.size),
-            Encoding::Plain => bulk::compress(&stored, ZSTD_LEVEL),
+            Encoding::Zstd => zstd::decompress(&stored, self.size),
+            Encoding::Plain => zstd::compress(&stored),
         })
         .await
         .map_err(ChunkError::Task)?

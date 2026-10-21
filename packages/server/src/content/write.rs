@@ -1,7 +1,6 @@
 //! Writing content.
 
 use core::error::Error;
-use core::mem;
 use std::io;
 
 use aws_lc_rs::error::Unspecified;
@@ -19,11 +18,10 @@ use object_store::{
     ObjectStore, ObjectStoreExt as _, PutMultipartOptions, PutOptions, PutPayload, WriteMultipart,
 };
 use tokio::task::{self, JoinError};
-use zstd::bulk;
 
 use super::chunker::Chunker;
 use super::upload::Upload;
-use super::{Content, ZSTD_LEVEL, new_object_key};
+use super::{Content, new_object_key, zstd};
 use crate::sha256::{Hasher, Sha256};
 use crate::store::StoreName;
 
@@ -136,20 +134,25 @@ impl Content {
         let mut hash = Hasher::new();
         let mut size = 0u64;
         let mut chunker = Chunker::default();
+        let mut ready = Vec::new();
         let mut pending = FuturesOrdered::new();
         let mut chunks = Vec::new();
         let mut finished = false;
         while !finished {
-            let ready = if let Some(bytes) = body.next().await {
+            if let Some(bytes) = body.next().await {
                 let bytes = bytes.map_err(|source| WriteError::Body(Box::new(source)))?;
                 hash.update(&bytes);
                 size = size.saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
-                chunker.push(&bytes)
+                chunker.push(&bytes, &mut ready);
             } else {
                 finished = true;
-                mem::take(&mut chunker).finish()
-            };
-            for chunk in ready {
+                chunker.finish(&mut ready);
+            }
+            #[expect(
+                clippy::iter_with_drain,
+                reason = "draining keeps the allocation for the next read"
+            )]
+            for chunk in ready.drain(..) {
                 if pending.len() >= CHUNK_CONCURRENCY
                     && let Some(id) = pending.next().await
                 {
@@ -241,7 +244,7 @@ async fn store_chunk(
         return Ok(id);
     }
     let size = i64::try_from(chunk.len()).map_err(|_overflow| WriteError::TooLarge)?;
-    let compressed = task::spawn_blocking(move || bulk::compress(&chunk, ZSTD_LEVEL))
+    let compressed = task::spawn_blocking(move || zstd::compress(&chunk))
         .await
         .map_err(WriteError::Task)?
         .map_err(WriteError::Compress)?;

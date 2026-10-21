@@ -11,6 +11,7 @@ mod read;
 mod tier;
 mod upload;
 mod write;
+mod zstd;
 
 use core::time::Duration;
 
@@ -27,9 +28,6 @@ use crate::store::{StoreName, Stores};
 
 /// The prefix of chunk objects within a store.
 const CHUNK_PREFIX: &str = "chunks";
-
-/// The zstd level of new chunks.
-const ZSTD_LEVEL: i32 = 8;
 
 /// Content in object storage, indexed in Postgres.
 #[derive(Debug)]
