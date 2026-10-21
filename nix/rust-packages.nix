@@ -34,7 +34,11 @@ in
       rust = config.ephemeris.rust;
       craneLib = (ephemerisInputs.crane.mkLib pkgs).overrideToolchain rust.toolchain;
       common = {
-        src = craneLib.cleanCargoSource self;
+        src = lib.cleanSourceWith {
+          src = self;
+          name = "source";
+          filter = path: type: craneLib.filterCargoSources path type || lib.hasSuffix ".sql" path;
+        };
         strictDeps = true;
         version = workspaceVersion;
         inherit (rust.nativeInputs) nativeBuildInputs buildInputs;
