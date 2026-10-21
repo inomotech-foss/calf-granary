@@ -1,0 +1,8 @@
+apiVersion: v2
+name: calf-granary
+description: Build caches for Yocto and Nix with hash equivalence
+type: application
+version: 0.1.0
+appVersion: 0.1.0
+annotations:
+  artifacthub.io/license: AGPL-3.0-or-later

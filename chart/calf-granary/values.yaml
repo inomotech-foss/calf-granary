@@ -1,0 +1,56 @@
+image:
+  repository: codeberg.org/inomotech/calf-granary-server
+  tag: ""
+  pullPolicy: IfNotPresent
+config: |
+  stores = {}
+  caches = {}
+database:
+  secretName: ""
+  urlKey: DATABASE_URL
+  caKey: ca.crt
+tokenSecret:
+  secretName: ""
+  key: token-secret
+storage:
+  secretName: ""
+signingKeys:
+  secretName: ""
+otel:
+  endpoint: ""
+  metricsEndpoint: ""
+extraEnv: []
+serve:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+worker:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+service:
+  port: 80
+route:
+  enabled: false
+  hostnames: []
+  parentRefs: []
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  fsGroup: 65534
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL

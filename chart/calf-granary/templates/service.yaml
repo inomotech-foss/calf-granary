@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "granary.name" . }}
+  labels:
+    {{- include "granary.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "granary.selector" (dict "root" . "component" "serve") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http

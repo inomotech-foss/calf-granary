@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "granary.name" . }}-serve
+  labels:
+    {{- include "granary.labels" . | nindent 4 }}
+    app.kubernetes.io/component: serve
+spec:
+  replicas: {{ .Values.serve.replicas }}
+  selector:
+    matchLabels:
+      {{- include "granary.selector" (dict "root" . "component" "serve") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "granary.labels" . | nindent 8 }}
+        app.kubernetes.io/component: serve
+      annotations:
+        checksum/config: {{ .Values.config | sha256sum }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        - name: migrate
+          image: {{ include "granary.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["migrate"]
+          env:
+            {{- include "granary.env" . | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            {{- include "granary.volumeMounts" . | nindent 12 }}
+      containers:
+        - name: serve
+          image: {{ include "granary.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["serve"]
+          env:
+            {{- include "granary.env" . | nindent 12 }}
+            - name: GRANARY_TOKEN_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "tokenSecret.secretName is required" .Values.tokenSecret.secretName }}
+                  key: {{ .Values.tokenSecret.key }}
+          envFrom:
+            {{- include "granary.envFrom" . | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+          resources:
+            {{- toYaml .Values.serve.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            {{- include "granary.volumeMounts" . | nindent 12 }}
+      volumes:
+        {{- include "granary.volumes" . | nindent 8 }}
