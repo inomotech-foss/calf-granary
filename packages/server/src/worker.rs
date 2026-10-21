@@ -22,6 +22,9 @@ use crate::database::DatabaseArgs;
 use crate::migrations::{self, MigrationError};
 use crate::tasks::{Runner, TaskKind, WorkerId};
 
+/// The channel on which Postgres announces pending tasks.
+const TASK_CHANNEL: &str = "task";
+
 /// How long the worker waits after a database error.
 const ERROR_DELAY: Duration = Duration::from_secs(15);
 
@@ -77,6 +80,7 @@ impl WorkerArgs {
             stop_sender.send_replace(true);
         });
 
+        let wakeup = self.database.listen(TASK_CHANNEL);
         let worker = Worker {
             id: WorkerId::current(),
             runner: Runner::new(pool.clone(), Arc::new(caches)),
@@ -95,6 +99,7 @@ impl WorkerArgs {
             });
             tokio::select! {
                 () = time::sleep(idle) => {}
+                () = wakeup.notified() => {}
                 _ = stop.changed() => {}
             }
         }

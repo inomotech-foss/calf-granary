@@ -1,10 +1,14 @@
 //! Postgres connections.
 
 use core::error::Error;
+use std::sync::Arc;
 
 use clap::Args;
 use deadpool_postgres::{BuildError, Manager, Pool};
+use tokio::sync::Notify;
 use tokio_postgres::{Client, Config, NoTls};
+
+use crate::notifications;
 
 /// Command-line arguments that locate Postgres.
 #[derive(Debug, Args)]
@@ -29,5 +33,18 @@ impl DatabaseArgs {
     /// Creates a connection pool. Connections open on first use.
     pub(crate) fn pool(&self) -> Result<Pool, BuildError> {
         Pool::builder(Manager::new(self.database_url.clone(), NoTls)).build()
+    }
+
+    /// Listens on a channel in the background on a dedicated connection.
+    ///
+    /// The returned handle is woken for every notification.
+    pub(crate) fn listen(&self, channel: &'static str) -> Arc<Notify> {
+        let notify = Arc::new(Notify::new());
+        tokio::spawn(notifications::listen(
+            self.database_url.clone(),
+            channel,
+            Arc::clone(&notify),
+        ));
+        notify
     }
 }

@@ -9,6 +9,7 @@ mod duration;
 mod exchange;
 mod http;
 mod migrations;
+mod notifications;
 mod oidc;
 mod prune;
 mod serve;
