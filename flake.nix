@@ -16,6 +16,7 @@
         ephemeris.presets.inomotech
         ./ephemeris.nix
         ./nix/cornucopia.nix
+        ./nix/dev.nix
         ./nix/rust-packages.nix
       ];
 
