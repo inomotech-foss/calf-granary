@@ -110,14 +110,15 @@ impl Runner {
                     cache: name.clone(),
                     source,
                 })?;
-            let Some(PruneStats {
+            let Some(stats) = stats else {
+                continue;
+            };
+            self.metrics.pruned(name, stats);
+            let PruneStats {
                 scanned,
                 deleted,
                 freed_bytes,
-            }) = stats
-            else {
-                continue;
-            };
+            } = stats;
             let count = |value: u64| i64::try_from(value).unwrap_or(i64::MAX);
             record_prune_run()
                 .bind(
