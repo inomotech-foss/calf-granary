@@ -1,5 +1,7 @@
 //! Reading and writing objects in caches.
 
+mod metrics;
+
 use core::error::Error;
 use std::sync::Arc;
 
@@ -12,6 +14,7 @@ use axum::response::{IntoResponse as _, Response};
 use axum::routing::get;
 use object_store::{GetResult, ObjectMeta};
 
+use self::metrics::{Lookup, ObjectMetrics};
 use super::bearer;
 use crate::access::AccessLog;
 use crate::cache::{Caches, ObjectKey, PutError};
@@ -26,6 +29,8 @@ struct Objects {
     access: Arc<AccessLog>,
     /// The key that verifies write tokens.
     key: TokenKey,
+    /// Records reads and writes.
+    metrics: ObjectMetrics,
 }
 
 impl Objects {
@@ -41,11 +46,21 @@ impl Objects {
             ObjectKey::try_from(key.as_str()).map_err(|_invalid| StatusCode::BAD_REQUEST)?;
         match found.get(&object, head).await {
             Ok(Some(hit)) => {
+                let lookup = if hit.fallback {
+                    Lookup::Fallback
+                } else {
+                    Lookup::Hit
+                };
+                self.metrics.lookup(cache, lookup);
                 self.access.record(hit.object);
                 Ok(hit.result)
             }
-            Ok(None) => Err(StatusCode::NOT_FOUND),
+            Ok(None) => {
+                self.metrics.lookup(cache, Lookup::Miss);
+                Err(StatusCode::NOT_FOUND)
+            }
             Err(err) => {
+                self.metrics.lookup(cache, Lookup::Error);
                 tracing::error!(
                     error = &err as &dyn Error,
                     cache,
@@ -70,6 +85,7 @@ pub(super) fn router(caches: Arc<Caches>, access: Arc<AccessLog>, key: TokenKey)
             caches,
             access,
             key,
+            metrics: ObjectMetrics::new(),
         })
 }
 
@@ -77,6 +93,8 @@ pub(super) fn router(caches: Arc<Caches>, access: Arc<AccessLog>, key: TokenKey)
 async fn get_object(state: State<Objects>, path: Path<(String, String)>) -> Response {
     match state.fetch(&path, false).await {
         Ok(result) => {
+            let Path((cache, _)) = &path;
+            state.metrics.served(cache, result.meta.size);
             let headers = object_headers(&result.meta);
             (headers, Body::from_stream(result.into_stream())).into_response()
         }

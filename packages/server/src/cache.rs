@@ -124,6 +124,8 @@ pub(crate) struct StoredObject {
 pub(crate) struct Hit {
     /// Where the object was found.
     pub(crate) object: StoredObject,
+    /// Whether the fallback cache had the object.
+    pub(crate) fallback: bool,
     /// The object's metadata and, unless only the metadata was requested,
     /// its content.
     pub(crate) result: GetResult,
@@ -178,7 +180,10 @@ impl Cache {
             return Ok(Some(hit));
         }
         match &self.fallback {
-            Some(fallback) => fallback.get_here(key, head).await,
+            Some(fallback) => Ok(fallback.get_here(key, head).await?.map(|hit| Hit {
+                fallback: true,
+                ..hit
+            })),
             None => Ok(None),
         }
     }
@@ -193,6 +198,7 @@ impl Cache {
         match self.store.get_opts(&key.0, options).await {
             Ok(result) => Ok(Some(Hit {
                 object: self.object(key),
+                fallback: false,
                 result,
             })),
             Err(object_store::Error::NotFound { path: _, source: _ }) => Ok(None),
