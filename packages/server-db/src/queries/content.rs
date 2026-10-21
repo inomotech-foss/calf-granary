@@ -1771,12 +1771,7 @@ impl<
 }
 pub struct ZstdSizeStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn zstd_size() -> ZstdSizeStmt {
-    ZstdSizeStmt(
-        "SELECT CASE WHEN bool_and(chunk.compression = 'zstd') THEN \
-         sum(chunk.stored_size)::bigint END AS size FROM blob_chunk JOIN chunk ON chunk.id = \
-         blob_chunk.chunk_id WHERE blob_chunk.blob_id = $1::bigint",
-        None,
-    )
+    ZstdSizeStmt("SELECT blob_zstd_size($1::bigint) AS size", None)
 }
 impl ZstdSizeStmt {
     pub async fn prepare<'a, C: GenericClient>(

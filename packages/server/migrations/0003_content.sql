@@ -31,6 +31,15 @@ CREATE TABLE blob_chunk (
 
 CREATE INDEX blob_chunk_chunk ON blob_chunk (chunk_id);
 
+CREATE FUNCTION blob_zstd_size(blob_id bigint) RETURNS bigint
+LANGUAGE sql STABLE
+RETURN (
+    SELECT CASE WHEN bool_and(chunk.compression = 'zstd') THEN sum(chunk.stored_size)::bigint END
+    FROM blob_chunk
+    JOIN chunk ON chunk.id = blob_chunk.chunk_id
+    WHERE blob_chunk.blob_id = blob_zstd_size.blob_id
+);
+
 CREATE TABLE entry (
     cache cache_name NOT NULL,
     key entry_key NOT NULL,

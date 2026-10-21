@@ -20,12 +20,7 @@ SELECT
     entry.blob_id,
     blob.hash,
     blob.size,
-    (
-        SELECT CASE WHEN bool_and(chunk.compression = 'zstd') THEN sum(chunk.stored_size)::bigint END
-        FROM blob_chunk
-        JOIN chunk ON chunk.id = blob_chunk.chunk_id
-        WHERE blob_chunk.blob_id = blob.id
-    ) AS file_size
+    blob_zstd_size(blob.id) AS file_size
 FROM nix_path
 JOIN entry USING (cache, key)
 JOIN blob ON blob.id = entry.blob_id
