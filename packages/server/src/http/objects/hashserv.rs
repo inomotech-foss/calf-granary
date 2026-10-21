@@ -14,7 +14,6 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse as _, Response};
-use chrono::{DateTime, FixedOffset};
 use deadpool_postgres::Client;
 use futures::FutureExt as _;
 use serde::Deserialize;
@@ -23,7 +22,8 @@ use tokio::time;
 
 pub(crate) use self::stats::HashservStats;
 use super::Objects;
-use crate::cache::{Cache, Protocol, Report};
+use crate::cache::{Cache, HashservError, Protocol, Report, StoredReport};
+use crate::sha256::Sha256;
 
 /// The protocol name in the first line of a connection.
 const PROTOCOL: &str = "OEHASHEQUIV";
@@ -58,7 +58,7 @@ struct GetRequest {
     /// The hash method.
     method: String,
     /// The task's input hash.
-    taskhash: String,
+    taskhash: Sha256,
     /// Whether to include the task's output hash report.
     #[serde(default)]
     all: bool,
@@ -70,7 +70,7 @@ struct GetOuthashRequest {
     /// The hash method.
     method: String,
     /// The output hash.
-    outhash: String,
+    outhash: Sha256,
     /// Whether to include the unihash.
     #[serde(default = "default_true")]
     with_unihash: bool,
@@ -80,13 +80,13 @@ struct GetOuthashRequest {
 #[derive(Debug, Deserialize)]
 struct ReportRequest {
     /// The task's input hash.
-    taskhash: String,
+    taskhash: Sha256,
     /// The hash method.
     method: String,
     /// The task's output hash.
-    outhash: String,
+    outhash: Sha256,
     /// The unihash the build used.
-    unihash: String,
+    unihash: Sha256,
     /// Who reports.
     owner: Option<String>,
     /// The recipe name.
@@ -108,11 +108,11 @@ struct ReportRequest {
 #[derive(Debug, Deserialize)]
 struct ReportEquivRequest {
     /// The task's input hash.
-    taskhash: String,
+    taskhash: Sha256,
     /// The hash method.
     method: String,
     /// The unihash.
-    unihash: String,
+    unihash: Sha256,
 }
 
 /// A login.
@@ -135,6 +135,12 @@ enum Failure {
 
 impl From<tokio_postgres::Error> for Failure {
     fn from(err: tokio_postgres::Error) -> Self {
+        HashservError::from(err).into()
+    }
+}
+
+impl From<HashservError> for Failure {
+    fn from(err: HashservError) -> Self {
         tracing::error!(error = &err as &dyn Error, "hash equivalence query failed");
         Self::Close
     }
@@ -184,30 +190,18 @@ impl Handler<'_> {
         if request.all {
             let row = self
                 .cache
-                .task(client, &request.method, &request.taskhash)
+                .task(client, &request.method, request.taskhash)
                 .await?;
             return Ok(row.map_or(Value::Null, |row| {
-                let mut reply = report_fields(
-                    &request.method,
-                    &request.taskhash,
-                    &row.outhash,
-                    row.created_at,
-                    [
-                        row.owner,
-                        row.pn,
-                        row.pv,
-                        row.pr,
-                        row.task,
-                        row.outhash_siginfo,
-                    ],
-                );
-                reply.insert("unihash".to_owned(), row.unihash.into());
+                let unihash = row.unihash;
+                let mut reply = report_fields(&request.method, row);
+                reply.insert("unihash".to_owned(), unihash.to_string().into());
                 Value::Object(reply)
             }));
         }
         let unihash = self
             .cache
-            .unihash(client, &request.method, &request.taskhash)
+            .unihash(client, &request.method, request.taskhash)
             .await?;
         Ok(unihash.map_or(Value::Null, |unihash| {
             json!({ "taskhash": request.taskhash, "method": request.method, "unihash": unihash })
@@ -222,30 +216,13 @@ impl Handler<'_> {
     ) -> Result<Value, Failure> {
         let row = self
             .cache
-            .outhash(
-                client,
-                &request.method,
-                &request.outhash,
-                request.with_unihash,
-            )
+            .outhash(client, &request.method, request.outhash)
             .await?;
         Ok(row.map_or(Value::Null, |row| {
-            let mut reply = report_fields(
-                &request.method,
-                &row.taskhash,
-                &request.outhash,
-                row.created_at,
-                [
-                    row.owner,
-                    row.pn,
-                    row.pv,
-                    row.pr,
-                    row.task,
-                    row.outhash_siginfo,
-                ],
-            );
+            let unihash = row.unihash;
+            let mut reply = report_fields(&request.method, row);
             if request.with_unihash {
-                reply.insert("unihash".to_owned(), row.unihash.into());
+                reply.insert("unihash".to_owned(), unihash.to_string().into());
             }
             Value::Object(reply)
         }))
@@ -253,22 +230,21 @@ impl Handler<'_> {
 
     /// Answers `report`, recording it only for clients that may report.
     async fn report(&self, client: &Client, request: ReportRequest) -> Result<Value, Failure> {
-        check_unihash(&request.unihash)?;
         let mut report = Report {
-            method: request.method,
+            method: &request.method,
             taskhash: request.taskhash,
             outhash: request.outhash,
             unihash: request.unihash,
-            owner: request.owner,
-            pn: request.pn,
-            pv: request.pv,
-            pr: request.pr,
-            task: request.task,
-            outhash_siginfo: request.outhash_siginfo,
+            owner: request.owner.as_deref(),
+            pn: request.pn.as_deref(),
+            pv: request.pv.as_deref(),
+            pr: request.pr.as_deref(),
+            task: request.task.as_deref(),
+            outhash_siginfo: request.outhash_siginfo.as_deref(),
         };
         let unihash = match &self.login {
             Some(login) if login.can_report => {
-                report.owner = Some(login.subject.clone());
+                report.owner = Some(&login.subject);
                 self.cache.report(client, &report).await?
             }
             Some(_) | None => self.cache.report_read_only(client, &report).await?,
@@ -288,10 +264,9 @@ impl Handler<'_> {
                 self.who()
             )));
         }
-        check_unihash(&request.unihash)?;
         let unihash = self
             .cache
-            .report_equivalent(client, &request.method, &request.taskhash, &request.unihash)
+            .report_equivalent(client, &request.method, request.taskhash, request.unihash)
             .await?;
         Ok(json!({ "taskhash": request.taskhash, "method": request.method, "unihash": unihash }))
     }
@@ -498,7 +473,7 @@ impl Session<'_> {
                     lines.push(line);
                 }
             }
-            let answers = match kind {
+            let answers: Vec<String> = match kind {
                 StreamKind::Unihashes => {
                     let tasks = lines
                         .iter()
@@ -506,28 +481,46 @@ impl Session<'_> {
                             let mut words = line.split_whitespace();
                             match (words.next(), words.next(), words.next()) {
                                 (Some(method), Some(taskhash), None) => {
-                                    Ok((method.to_owned(), taskhash.to_owned()))
+                                    Ok(taskhash.parse().ok().map(|taskhash| (method, taskhash)))
                                 }
                                 _ => Err(Failure::Close),
                             }
                         })
                         .collect::<Result<Vec<_>, _>>()?;
-                    self.handler
+                    let valid: Vec<(&str, Sha256)> = tasks.iter().flatten().copied().collect();
+                    let mut found = self
+                        .handler
                         .cache
-                        .unihashes(client, &tasks)
+                        .unihashes(client, &valid)
                         .await?
-                        .into_iter()
-                        .map(Option::unwrap_or_default)
-                        .collect::<Vec<_>>()
+                        .into_iter();
+                    tasks
+                        .iter()
+                        .map(|task| {
+                            task.and_then(|_task| found.next().flatten())
+                                .map(|unihash| unihash.to_string())
+                                .unwrap_or_default()
+                        })
+                        .collect()
                 }
-                StreamKind::Exists => self
-                    .handler
-                    .cache
-                    .unihashes_exist(client, &lines)
-                    .await?
-                    .into_iter()
-                    .map(|exists| exists.to_string())
-                    .collect(),
+                StreamKind::Exists => {
+                    let unihashes: Vec<Option<Sha256>> =
+                        lines.iter().map(|line| line.parse().ok()).collect();
+                    let valid: Vec<Sha256> = unihashes.iter().flatten().copied().collect();
+                    let mut exists = self
+                        .handler
+                        .cache
+                        .unihashes_exist(client, &valid)
+                        .await?
+                        .into_iter();
+                    unihashes
+                        .iter()
+                        .map(|unihash| {
+                            let found = unihash.is_some() && exists.next().unwrap_or(false);
+                            found.to_string()
+                        })
+                        .collect()
+                }
             };
             for answer in answers {
                 if !self.send(answer).await {
@@ -605,22 +598,10 @@ const fn default_true() -> bool {
     true
 }
 
-/// Parses a command payload, closing the connection if it's invalid.
+/// Parses a command payload, answering an error if it's invalid.
 fn parse<T: for<'de> Deserialize<'de>>(payload: Value) -> Result<T, Failure> {
-    serde_json::from_value(payload).map_err(|_invalid| Failure::Close)
-}
-
-/// Rejects unihashes that aren't 64 lowercase hexadecimal digits.
-fn check_unihash(unihash: &str) -> Result<(), Failure> {
-    let valid = unihash.len() == 64
-        && unihash
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
-    if valid {
-        Ok(())
-    } else {
-        Err(Failure::Invoke("Invalid unihash".to_owned()))
-    }
+    serde_json::from_value(payload)
+        .map_err(|_invalid| Failure::Invoke("Invalid request".to_owned()))
 }
 
 /// Whether a stream line ends stream mode.
@@ -638,23 +619,17 @@ fn permissions(login: Option<&Login>) -> Vec<&'static str> {
 }
 
 /// The fields of an output hash report in the upstream format.
-fn report_fields(
-    method: &str,
-    taskhash: &str,
-    outhash: &str,
-    created: DateTime<FixedOffset>,
-    [owner, pn, pv, pr, task, siginfo]: [Option<String>; 6],
-) -> Map<String, Value> {
+fn report_fields(method: &str, report: StoredReport) -> Map<String, Value> {
     let mut fields = Map::new();
     fields.insert("method".to_owned(), method.into());
-    fields.insert("taskhash".to_owned(), taskhash.into());
-    fields.insert("outhash".to_owned(), outhash.into());
-    fields.insert("created".to_owned(), created.to_rfc3339().into());
-    fields.insert("owner".to_owned(), owner.into());
-    fields.insert("PN".to_owned(), pn.into());
-    fields.insert("PV".to_owned(), pv.into());
-    fields.insert("PR".to_owned(), pr.into());
-    fields.insert("task".to_owned(), task.into());
-    fields.insert("outhash_siginfo".to_owned(), siginfo.into());
+    fields.insert("taskhash".to_owned(), report.taskhash.to_string().into());
+    fields.insert("outhash".to_owned(), report.outhash.to_string().into());
+    fields.insert("created".to_owned(), report.created_at.to_rfc3339().into());
+    fields.insert("owner".to_owned(), report.owner.into());
+    fields.insert("PN".to_owned(), report.pn.into());
+    fields.insert("PV".to_owned(), report.pv.into());
+    fields.insert("PR".to_owned(), report.pr.into());
+    fields.insert("task".to_owned(), report.task.into());
+    fields.insert("outhash_siginfo".to_owned(), report.outhash_siginfo.into());
     fields
 }

@@ -1,27 +1,52 @@
 //! Hash equivalence data in hashserv caches.
 
 use calf_granary_server_db::queries::hashserv::{
-    FindOuthash, FindTask, delete_orphan_outhashes, existing_unihashes, expire_unihashes,
-    find_equivalent, find_outhash, find_task, find_unihash, find_unihashes, insert_outhash,
-    insert_unihash, touch_unihashes,
+    HashservReport, existing_unihashes, expire_unihashes, find_equivalent, find_outhash, find_task,
+    find_unihash, find_unihashes, insert_outhash, insert_unihash, touch_unihashes,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, FixedOffset, Utc};
 use deadpool_postgres::Client;
 
 use super::Cache;
+use crate::sha256::{InvalidSha256, Sha256};
 
 /// What a build reports after running a task.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Report {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Report<'a> {
     /// The hash method.
-    pub(crate) method: String,
+    pub(crate) method: &'a str,
     /// The task's input hash.
-    pub(crate) taskhash: String,
+    pub(crate) taskhash: Sha256,
     /// The task's output hash.
-    pub(crate) outhash: String,
+    pub(crate) outhash: Sha256,
     /// The unihash that the build used.
-    pub(crate) unihash: String,
+    pub(crate) unihash: Sha256,
     /// Who reported, for statistics.
+    pub(crate) owner: Option<&'a str>,
+    /// The recipe name.
+    pub(crate) pn: Option<&'a str>,
+    /// The recipe version.
+    pub(crate) pv: Option<&'a str>,
+    /// The recipe revision.
+    pub(crate) pr: Option<&'a str>,
+    /// The task name.
+    pub(crate) task: Option<&'a str>,
+    /// The signature data of the output hash.
+    pub(crate) outhash_siginfo: Option<&'a str>,
+}
+
+/// A recorded report with the unihash its task has.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StoredReport {
+    /// The task's input hash.
+    pub(crate) taskhash: Sha256,
+    /// The task's output hash.
+    pub(crate) outhash: Sha256,
+    /// The task's unihash.
+    pub(crate) unihash: Sha256,
+    /// When the report arrived.
+    pub(crate) created_at: DateTime<FixedOffset>,
+    /// Who reported.
     pub(crate) owner: Option<String>,
     /// The recipe name.
     pub(crate) pn: Option<String>,
@@ -35,29 +60,61 @@ pub(crate) struct Report {
     pub(crate) outhash_siginfo: Option<String>,
 }
 
+impl TryFrom<HashservReport> for StoredReport {
+    type Error = InvalidSha256;
+
+    fn try_from(row: HashservReport) -> Result<Self, Self::Error> {
+        Ok(Self {
+            taskhash: row.taskhash.as_slice().try_into()?,
+            outhash: row.outhash.as_slice().try_into()?,
+            unihash: row.unihash.as_slice().try_into()?,
+            created_at: row.created_at,
+            owner: row.owner,
+            pn: row.pn,
+            pv: row.pv,
+            pr: row.pr,
+            task: row.task,
+            outhash_siginfo: row.outhash_siginfo,
+        })
+    }
+}
+
+/// Errors from hash equivalence queries.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum HashservError {
+    /// A query failed.
+    #[error("a hash equivalence query failed")]
+    Database(#[from] tokio_postgres::Error),
+    /// The database returned a hash that isn't a SHA-256 digest.
+    #[error("the database returned an invalid hash")]
+    Digest(#[from] InvalidSha256),
+}
+
 impl Cache {
     /// Looks up the unihashes of `(method, taskhash)` pairs, in order.
     pub(crate) async fn unihashes(
         &self,
         client: &Client,
-        tasks: &[(String, String)],
-    ) -> Result<Vec<Option<String>>, tokio_postgres::Error> {
-        let mut found: Vec<Option<String>> = vec![None; tasks.len()];
+        tasks: &[(&str, Sha256)],
+    ) -> Result<Vec<Option<Sha256>>, HashservError> {
+        let mut found: Vec<Option<Sha256>> = vec![None; tasks.len()];
+        let mut missing = Vec::with_capacity(tasks.len());
+        let mut methods = Vec::with_capacity(tasks.len());
+        let mut taskhashes = Vec::with_capacity(tasks.len());
         for cache in self.lookup_chain() {
-            let missing: Vec<usize> = (0..tasks.len())
-                .filter(|index| found.get(*index).is_some_and(Option::is_none))
-                .collect();
+            missing.clear();
+            methods.clear();
+            taskhashes.clear();
+            for (index, (slot, (method, taskhash))) in found.iter().zip(tasks).enumerate() {
+                if slot.is_none() {
+                    missing.push(index);
+                    methods.push(*method);
+                    taskhashes.push(taskhash.as_bytes().as_slice());
+                }
+            }
             if missing.is_empty() {
                 break;
             }
-            let methods: Vec<&str> = missing
-                .iter()
-                .filter_map(|index| tasks.get(*index).map(|task| task.0.as_str()))
-                .collect();
-            let taskhashes: Vec<&str> = missing
-                .iter()
-                .filter_map(|index| tasks.get(*index).map(|task| task.1.as_str()))
-                .collect();
             let rows = find_unihashes()
                 .bind(
                     client,
@@ -73,7 +130,7 @@ impl Cache {
                     .and_then(|position| position.checked_sub(1))
                     .and_then(|position| missing.get(position));
                 if let Some(slot) = position.and_then(|index| found.get_mut(*index)) {
-                    *slot = Some(row.unihash.clone());
+                    *slot = Some(row.unihash.as_slice().try_into()?);
                 }
             }
             if !rows.is_empty() {
@@ -94,14 +151,18 @@ impl Cache {
     pub(crate) async fn unihashes_exist(
         &self,
         client: &Client,
-        unihashes: &[String],
+        unihashes: &[Sha256],
     ) -> Result<Vec<bool>, tokio_postgres::Error> {
         let caches: Vec<&str> = self
             .lookup_chain()
             .map(|cache| cache.name.as_ref())
             .collect();
+        let unihashes_bytes: Vec<&[u8]> = unihashes
+            .iter()
+            .map(|unihash| unihash.as_bytes().as_slice())
+            .collect();
         let positions = existing_unihashes()
-            .bind(client, &unihashes, &caches.as_slice())
+            .bind(client, &unihashes_bytes.as_slice(), &caches.as_slice())
             .all()
             .await?;
         let mut exists = vec![false; unihashes.len()];
@@ -121,11 +182,10 @@ impl Cache {
         &self,
         client: &Client,
         method: &str,
-        taskhash: &str,
-    ) -> Result<Option<String>, tokio_postgres::Error> {
-        let tasks = [(method.to_owned(), taskhash.to_owned())];
+        taskhash: Sha256,
+    ) -> Result<Option<Sha256>, HashservError> {
         Ok(self
-            .unihashes(client, &tasks)
+            .unihashes(client, &[(method, taskhash)])
             .await?
             .into_iter()
             .flatten()
@@ -137,41 +197,44 @@ impl Cache {
         &self,
         client: &Client,
         method: &str,
-        taskhash: &str,
-    ) -> Result<Option<FindTask>, tokio_postgres::Error> {
+        taskhash: Sha256,
+    ) -> Result<Option<StoredReport>, HashservError> {
         for cache in self.lookup_chain() {
             let row = find_task()
-                .bind(client, &cache.name.as_ref(), &method, &taskhash)
+                .bind(
+                    client,
+                    &cache.name.as_ref(),
+                    &method,
+                    &taskhash.as_bytes().as_slice(),
+                )
                 .opt()
                 .await?;
-            if row.is_some() {
-                return Ok(row);
+            if let Some(row) = row {
+                return Ok(Some(row.try_into()?));
             }
         }
         Ok(None)
     }
 
-    /// Looks up the oldest report of an output hash.
+    /// Looks up the oldest report of an output hash with its unihash.
     pub(crate) async fn outhash(
         &self,
         client: &Client,
         method: &str,
-        outhash: &str,
-        with_unihash: bool,
-    ) -> Result<Option<FindOuthash>, tokio_postgres::Error> {
+        outhash: Sha256,
+    ) -> Result<Option<StoredReport>, HashservError> {
         for cache in self.lookup_chain() {
             let row = find_outhash()
                 .bind(
                     client,
                     &cache.name.as_ref(),
                     &method,
-                    &outhash,
-                    &with_unihash,
+                    &outhash.as_bytes().as_slice(),
                 )
                 .opt()
                 .await?;
-            if row.is_some() {
-                return Ok(row);
+            if let Some(row) = row {
+                return Ok(Some(row.try_into()?));
             }
         }
         Ok(None)
@@ -184,61 +247,44 @@ impl Cache {
     pub(crate) async fn report(
         &self,
         client: &Client,
-        report: &Report,
-    ) -> Result<String, tokio_postgres::Error> {
-        let inserted = insert_outhash()
-            .bind(
-                client,
-                &self.name.as_ref(),
-                &report.method.as_str(),
-                &report.taskhash.as_str(),
-                &report.outhash.as_str(),
-                &report.owner.as_deref(),
-                &report.pn.as_deref(),
-                &report.pv.as_deref(),
-                &report.pr.as_deref(),
-                &report.task.as_deref(),
-                &report.outhash_siginfo.as_deref(),
-            )
-            .await?;
-        if inserted > 0 {
-            let mut unihash = None;
-            for cache in self.lookup_chain() {
-                unihash = find_equivalent()
-                    .bind(
-                        client,
-                        &cache.name.as_ref(),
-                        &report.method.as_str(),
-                        &report.outhash.as_str(),
-                        &report.taskhash.as_str(),
-                    )
-                    .opt()
-                    .await?;
-                if unihash.is_some() {
-                    break;
-                }
-            }
-            let unihash = unihash.unwrap_or_else(|| report.unihash.clone());
-            insert_unihash()
-                .bind(
-                    client,
-                    &self.name.as_ref(),
-                    &report.method.as_str(),
-                    &report.taskhash.as_str(),
-                    &unihash.as_str(),
-                )
+        report: &Report<'_>,
+    ) -> Result<Sha256, HashservError> {
+        let method = report.method;
+        let taskhash = report.taskhash.as_bytes().as_slice();
+        let outhash = report.outhash.as_bytes().as_slice();
+        let mut equivalent = None;
+        for cache in self.lookup_chain() {
+            equivalent = find_equivalent()
+                .bind(client, &cache.name.as_ref(), &method, &outhash, &taskhash)
+                .opt()
                 .await?;
+            if equivalent.is_some() {
+                break;
+            }
         }
-        let current = find_unihash()
+        let unihash = equivalent
+            .as_deref()
+            .unwrap_or(report.unihash.as_bytes().as_slice());
+        insert_unihash()
+            .bind(client, &self.name.as_ref(), &method, &taskhash, &unihash)
+            .await?;
+        insert_outhash()
             .bind(
                 client,
                 &self.name.as_ref(),
-                &report.method.as_str(),
-                &report.taskhash.as_str(),
+                &method,
+                &taskhash,
+                &outhash,
+                &report.owner,
+                &report.pn,
+                &report.pv,
+                &report.pr,
+                &report.task,
+                &report.outhash_siginfo,
             )
-            .opt()
             .await?;
-        Ok(current.unwrap_or_else(|| report.unihash.clone()))
+        self.current_unihash(client, method, report.taskhash, report.unihash)
+            .await
     }
 
     /// Answers a report without recording it, for clients that may only
@@ -246,14 +292,10 @@ impl Cache {
     pub(crate) async fn report_read_only(
         &self,
         client: &Client,
-        report: &Report,
-    ) -> Result<String, tokio_postgres::Error> {
-        let row = self
-            .outhash(client, &report.method, &report.outhash, true)
-            .await?;
-        Ok(row
-            .and_then(|row| row.unihash)
-            .unwrap_or_else(|| report.unihash.clone()))
+        report: &Report<'_>,
+    ) -> Result<Sha256, HashservError> {
+        let row = self.outhash(client, report.method, report.outhash).await?;
+        Ok(row.map_or(report.unihash, |row| row.unihash))
     }
 
     /// Records that a task is equivalent to a unihash, unless the task has
@@ -262,32 +304,54 @@ impl Cache {
         &self,
         client: &Client,
         method: &str,
-        taskhash: &str,
-        unihash: &str,
-    ) -> Result<String, tokio_postgres::Error> {
+        taskhash: Sha256,
+        unihash: Sha256,
+    ) -> Result<Sha256, HashservError> {
         insert_unihash()
-            .bind(client, &self.name.as_ref(), &method, &taskhash, &unihash)
+            .bind(
+                client,
+                &self.name.as_ref(),
+                &method,
+                &taskhash.as_bytes().as_slice(),
+                &unihash.as_bytes().as_slice(),
+            )
             .await?;
-        let current = find_unihash()
-            .bind(client, &self.name.as_ref(), &method, &taskhash)
-            .opt()
-            .await?;
-        Ok(current.unwrap_or_else(|| unihash.to_owned()))
+        self.current_unihash(client, method, taskhash, unihash)
+            .await
     }
 
-    /// Deletes unihashes that weren't used since `cutoff`, and the reports
-    /// of tasks without unihashes. Returns how many unihashes were deleted.
+    /// The unihash that a task has in this cache, or `default`.
+    async fn current_unihash(
+        &self,
+        client: &Client,
+        method: &str,
+        taskhash: Sha256,
+        default: Sha256,
+    ) -> Result<Sha256, HashservError> {
+        let current = find_unihash()
+            .bind(
+                client,
+                &self.name.as_ref(),
+                &method,
+                &taskhash.as_bytes().as_slice(),
+            )
+            .opt()
+            .await?;
+        Ok(match current {
+            Some(current) => current.as_slice().try_into()?,
+            None => default,
+        })
+    }
+
+    /// Deletes unihashes that weren't used since `cutoff`, with the reports
+    /// of their tasks. Returns how many unihashes were deleted.
     pub(super) async fn expire_unihashes(
         &self,
         client: &Client,
         cutoff: DateTime<Utc>,
     ) -> Result<u64, tokio_postgres::Error> {
-        let expired = expire_unihashes()
+        expire_unihashes()
             .bind(client, &self.name.as_ref(), &cutoff.fixed_offset())
-            .await?;
-        delete_orphan_outhashes()
-            .bind(client, &self.name.as_ref())
-            .await?;
-        Ok(expired)
+            .await
     }
 }

@@ -17,6 +17,7 @@ mod notifications;
 mod oidc;
 mod run;
 mod serve;
+mod sha256;
 mod store;
 mod tasks;
 mod telemetry;

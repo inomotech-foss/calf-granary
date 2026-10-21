@@ -45,6 +45,14 @@ check(
     "batched lookups keep their order",
 )
 check(main.unihash_exists_batch([U1, U3]) == [True, False], "existence checks")
+check(
+    main.get_unihash_batch([(METHOD, "xyz"), (METHOD, T1)]) == [None, U1],
+    "malformed task hashes are misses",
+)
+check(
+    main.unihash_exists_batch(["XYZ", U1]) == [False, True],
+    "malformed unihashes don't exist",
+)
 full = main.get_taskhash(METHOD, T1, True)
 check(full["outhash"] == OUT and full["unihash"] == U1, "full task lookups")
 check(main.get_outhash(METHOD, OUT, T1)["unihash"] == U1, "output hash lookups")

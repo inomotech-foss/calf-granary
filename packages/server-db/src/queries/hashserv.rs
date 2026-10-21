@@ -4,7 +4,7 @@
 pub struct FindUnihashesParams<
     T1: crate::StringSql,
     T2: crate::ArraySql<Item = T1>,
-    T3: crate::StringSql,
+    T3: crate::BytesSql,
     T4: crate::ArraySql<Item = T3>,
     T5: crate::StringSql,
 > {
@@ -16,7 +16,7 @@ pub struct FindUnihashesParams<
 pub struct TouchUnihashesParams<
     T1: crate::StringSql,
     T2: crate::ArraySql<Item = T1>,
-    T3: crate::StringSql,
+    T3: crate::BytesSql,
     T4: crate::ArraySql<Item = T3>,
     T5: crate::StringSql,
 > {
@@ -26,7 +26,7 @@ pub struct TouchUnihashesParams<
 }
 #[derive(Debug)]
 pub struct ExistingUnihashesParams<
-    T1: crate::StringSql,
+    T1: crate::BytesSql,
     T2: crate::ArraySql<Item = T1>,
     T3: crate::StringSql,
     T4: crate::ArraySql<Item = T3>,
@@ -35,24 +35,23 @@ pub struct ExistingUnihashesParams<
     pub caches: T4,
 }
 #[derive(Debug)]
-pub struct FindTaskParams<T1: crate::StringSql, T2: crate::StringSql, T3: crate::StringSql> {
+pub struct FindTaskParams<T1: crate::StringSql, T2: crate::StringSql, T3: crate::BytesSql> {
     pub cache: T1,
     pub method: T2,
     pub taskhash: T3,
 }
 #[derive(Debug)]
-pub struct FindOuthashParams<T1: crate::StringSql, T2: crate::StringSql, T3: crate::StringSql> {
+pub struct FindOuthashParams<T1: crate::StringSql, T2: crate::StringSql, T3: crate::BytesSql> {
     pub cache: T1,
     pub method: T2,
     pub outhash: T3,
-    pub with_unihash: bool,
 }
 #[derive(Debug)]
 pub struct InsertOuthashParams<
     T1: crate::StringSql,
     T2: crate::StringSql,
-    T3: crate::StringSql,
-    T4: crate::StringSql,
+    T3: crate::BytesSql,
+    T4: crate::BytesSql,
     T5: crate::StringSql,
     T6: crate::StringSql,
     T7: crate::StringSql,
@@ -75,8 +74,8 @@ pub struct InsertOuthashParams<
 pub struct FindEquivalentParams<
     T1: crate::StringSql,
     T2: crate::StringSql,
-    T3: crate::StringSql,
-    T4: crate::StringSql,
+    T3: crate::BytesSql,
+    T4: crate::BytesSql,
 > {
     pub cache: T1,
     pub method: T2,
@@ -87,8 +86,8 @@ pub struct FindEquivalentParams<
 pub struct InsertUnihashParams<
     T1: crate::StringSql,
     T2: crate::StringSql,
-    T3: crate::StringSql,
-    T4: crate::StringSql,
+    T3: crate::BytesSql,
+    T4: crate::BytesSql,
 > {
     pub cache: T1,
     pub method: T2,
@@ -96,7 +95,7 @@ pub struct InsertUnihashParams<
     pub unihash: T4,
 }
 #[derive(Debug)]
-pub struct FindUnihashParams<T1: crate::StringSql, T2: crate::StringSql, T3: crate::StringSql> {
+pub struct FindUnihashParams<T1: crate::StringSql, T2: crate::StringSql, T3: crate::BytesSql> {
     pub cache: T1,
     pub method: T2,
     pub taskhash: T3,
@@ -109,11 +108,11 @@ pub struct ExpireUnihashesParams<T1: crate::StringSql> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FindUnihashes {
     pub position: i64,
-    pub unihash: String,
+    pub unihash: Vec<u8>,
 }
 pub struct FindUnihashesBorrowed<'a> {
     pub position: i64,
-    pub unihash: &'a str,
+    pub unihash: &'a [u8],
 }
 impl<'a> From<FindUnihashesBorrowed<'a>> for FindUnihashes {
     fn from(FindUnihashesBorrowed { position, unihash }: FindUnihashesBorrowed<'a>) -> Self {
@@ -124,8 +123,10 @@ impl<'a> From<FindUnihashesBorrowed<'a>> for FindUnihashes {
     }
 }
 #[derive(Debug, Clone, PartialEq)]
-pub struct FindTask {
-    pub outhash: String,
+pub struct HashservReport {
+    pub taskhash: Vec<u8>,
+    pub outhash: Vec<u8>,
+    pub unihash: Vec<u8>,
     pub created_at: chrono::DateTime<chrono::FixedOffset>,
     pub owner: Option<String>,
     pub pn: Option<String>,
@@ -133,10 +134,11 @@ pub struct FindTask {
     pub pr: Option<String>,
     pub task: Option<String>,
     pub outhash_siginfo: Option<String>,
-    pub unihash: String,
 }
-pub struct FindTaskBorrowed<'a> {
-    pub outhash: &'a str,
+pub struct HashservReportBorrowed<'a> {
+    pub taskhash: &'a [u8],
+    pub outhash: &'a [u8],
+    pub unihash: &'a [u8],
     pub created_at: chrono::DateTime<chrono::FixedOffset>,
     pub owner: Option<&'a str>,
     pub pn: Option<&'a str>,
@@ -144,62 +146,13 @@ pub struct FindTaskBorrowed<'a> {
     pub pr: Option<&'a str>,
     pub task: Option<&'a str>,
     pub outhash_siginfo: Option<&'a str>,
-    pub unihash: &'a str,
 }
-impl<'a> From<FindTaskBorrowed<'a>> for FindTask {
+impl<'a> From<HashservReportBorrowed<'a>> for HashservReport {
     fn from(
-        FindTaskBorrowed {
-            outhash,
-            created_at,
-            owner,
-            pn,
-            pv,
-            pr,
-            task,
-            outhash_siginfo,
-            unihash,
-        }: FindTaskBorrowed<'a>,
-    ) -> Self {
-        Self {
-            outhash: outhash.into(),
-            created_at,
-            owner: owner.map(|v| v.into()),
-            pn: pn.map(|v| v.into()),
-            pv: pv.map(|v| v.into()),
-            pr: pr.map(|v| v.into()),
-            task: task.map(|v| v.into()),
-            outhash_siginfo: outhash_siginfo.map(|v| v.into()),
-            unihash: unihash.into(),
-        }
-    }
-}
-#[derive(Debug, Clone, PartialEq)]
-pub struct FindOuthash {
-    pub taskhash: String,
-    pub created_at: chrono::DateTime<chrono::FixedOffset>,
-    pub owner: Option<String>,
-    pub pn: Option<String>,
-    pub pv: Option<String>,
-    pub pr: Option<String>,
-    pub task: Option<String>,
-    pub outhash_siginfo: Option<String>,
-    pub unihash: Option<String>,
-}
-pub struct FindOuthashBorrowed<'a> {
-    pub taskhash: &'a str,
-    pub created_at: chrono::DateTime<chrono::FixedOffset>,
-    pub owner: Option<&'a str>,
-    pub pn: Option<&'a str>,
-    pub pv: Option<&'a str>,
-    pub pr: Option<&'a str>,
-    pub task: Option<&'a str>,
-    pub outhash_siginfo: Option<&'a str>,
-    pub unihash: Option<&'a str>,
-}
-impl<'a> From<FindOuthashBorrowed<'a>> for FindOuthash {
-    fn from(
-        FindOuthashBorrowed {
+        HashservReportBorrowed {
             taskhash,
+            outhash,
+            unihash,
             created_at,
             owner,
             pn,
@@ -207,11 +160,12 @@ impl<'a> From<FindOuthashBorrowed<'a>> for FindOuthash {
             pr,
             task,
             outhash_siginfo,
-            unihash,
-        }: FindOuthashBorrowed<'a>,
+        }: HashservReportBorrowed<'a>,
     ) -> Self {
         Self {
             taskhash: taskhash.into(),
+            outhash: outhash.into(),
+            unihash: unihash.into(),
             created_at,
             owner: owner.map(|v| v.into()),
             pn: pn.map(|v| v.into()),
@@ -219,7 +173,6 @@ impl<'a> From<FindOuthashBorrowed<'a>> for FindOuthash {
             pr: pr.map(|v| v.into()),
             task: task.map(|v| v.into()),
             outhash_siginfo: outhash_siginfo.map(|v| v.into()),
-            unihash: unihash.map(|v| v.into()),
         }
     }
 }
@@ -357,87 +310,23 @@ where
         Ok(mapped)
     }
 }
-pub struct FindTaskQuery<'c, 'a, 's, C: GenericClient, T, const N: usize> {
+pub struct HashservReportQuery<'c, 'a, 's, C: GenericClient, T, const N: usize> {
     client: &'c C,
     params: [&'a (dyn postgres_types::ToSql + Sync); N],
     query: &'static str,
     cached: Option<&'s tokio_postgres::Statement>,
-    extractor: fn(&tokio_postgres::Row) -> Result<FindTaskBorrowed, tokio_postgres::Error>,
-    mapper: fn(FindTaskBorrowed) -> T,
+    extractor: fn(&tokio_postgres::Row) -> Result<HashservReportBorrowed, tokio_postgres::Error>,
+    mapper: fn(HashservReportBorrowed) -> T,
 }
-impl<'c, 'a, 's, C, T: 'c, const N: usize> FindTaskQuery<'c, 'a, 's, C, T, N>
-where
-    C: GenericClient,
-{
-    pub fn map<R>(self, mapper: fn(FindTaskBorrowed) -> R) -> FindTaskQuery<'c, 'a, 's, C, R, N> {
-        FindTaskQuery {
-            client: self.client,
-            params: self.params,
-            query: self.query,
-            cached: self.cached,
-            extractor: self.extractor,
-            mapper,
-        }
-    }
-    pub async fn one(self) -> Result<T, tokio_postgres::Error> {
-        let row =
-            crate::client::async_::one(self.client, self.query, &self.params, self.cached).await?;
-        Ok((self.mapper)((self.extractor)(&row)?))
-    }
-    pub async fn all(self) -> Result<Vec<T>, tokio_postgres::Error> {
-        self.iter().await?.try_collect().await
-    }
-    pub async fn opt(self) -> Result<Option<T>, tokio_postgres::Error> {
-        let opt_row =
-            crate::client::async_::opt(self.client, self.query, &self.params, self.cached).await?;
-        Ok(opt_row
-            .map(|row| {
-                let extracted = (self.extractor)(&row)?;
-                Ok((self.mapper)(extracted))
-            })
-            .transpose()?)
-    }
-    pub async fn iter(
-        self,
-    ) -> Result<
-        impl futures::Stream<Item = Result<T, tokio_postgres::Error>> + 'c,
-        tokio_postgres::Error,
-    > {
-        let stream = crate::client::async_::raw(
-            self.client,
-            self.query,
-            crate::slice_iter(&self.params),
-            self.cached,
-        )
-        .await?;
-        let mapped = stream
-            .map(move |res| {
-                res.and_then(|row| {
-                    let extracted = (self.extractor)(&row)?;
-                    Ok((self.mapper)(extracted))
-                })
-            })
-            .into_stream();
-        Ok(mapped)
-    }
-}
-pub struct FindOuthashQuery<'c, 'a, 's, C: GenericClient, T, const N: usize> {
-    client: &'c C,
-    params: [&'a (dyn postgres_types::ToSql + Sync); N],
-    query: &'static str,
-    cached: Option<&'s tokio_postgres::Statement>,
-    extractor: fn(&tokio_postgres::Row) -> Result<FindOuthashBorrowed, tokio_postgres::Error>,
-    mapper: fn(FindOuthashBorrowed) -> T,
-}
-impl<'c, 'a, 's, C, T: 'c, const N: usize> FindOuthashQuery<'c, 'a, 's, C, T, N>
+impl<'c, 'a, 's, C, T: 'c, const N: usize> HashservReportQuery<'c, 'a, 's, C, T, N>
 where
     C: GenericClient,
 {
     pub fn map<R>(
         self,
-        mapper: fn(FindOuthashBorrowed) -> R,
-    ) -> FindOuthashQuery<'c, 'a, 's, C, R, N> {
-        FindOuthashQuery {
+        mapper: fn(HashservReportBorrowed) -> R,
+    ) -> HashservReportQuery<'c, 'a, 's, C, R, N> {
+        HashservReportQuery {
             client: self.client,
             params: self.params,
             query: self.query,
@@ -488,20 +377,20 @@ where
         Ok(mapped)
     }
 }
-pub struct StringQuery<'c, 'a, 's, C: GenericClient, T, const N: usize> {
+pub struct Vecu8Query<'c, 'a, 's, C: GenericClient, T, const N: usize> {
     client: &'c C,
     params: [&'a (dyn postgres_types::ToSql + Sync); N],
     query: &'static str,
     cached: Option<&'s tokio_postgres::Statement>,
-    extractor: fn(&tokio_postgres::Row) -> Result<&str, tokio_postgres::Error>,
-    mapper: fn(&str) -> T,
+    extractor: fn(&tokio_postgres::Row) -> Result<&[u8], tokio_postgres::Error>,
+    mapper: fn(&[u8]) -> T,
 }
-impl<'c, 'a, 's, C, T: 'c, const N: usize> StringQuery<'c, 'a, 's, C, T, N>
+impl<'c, 'a, 's, C, T: 'c, const N: usize> Vecu8Query<'c, 'a, 's, C, T, N>
 where
     C: GenericClient,
 {
-    pub fn map<R>(self, mapper: fn(&str) -> R) -> StringQuery<'c, 'a, 's, C, R, N> {
-        StringQuery {
+    pub fn map<R>(self, mapper: fn(&[u8]) -> R) -> Vecu8Query<'c, 'a, 's, C, R, N> {
+        Vecu8Query {
             client: self.client,
             params: self.params,
             query: self.query,
@@ -555,7 +444,7 @@ where
 pub struct FindUnihashesStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn find_unihashes() -> FindUnihashesStmt {
     FindUnihashesStmt(
-        "SELECT requested.position, hashserv_unihash.unihash FROM unnest($1::text[], $2::text[]) \
+        "SELECT requested.position, hashserv_unihash.unihash FROM unnest($1::text[], $2::bytea[]) \
          WITH ORDINALITY AS requested (method, taskhash, position) JOIN hashserv_unihash ON \
          hashserv_unihash.cache = $3::text AND hashserv_unihash.method = requested.method AND \
          hashserv_unihash.taskhash = requested.taskhash",
@@ -577,7 +466,7 @@ impl FindUnihashesStmt {
         C: GenericClient,
         T1: crate::StringSql,
         T2: crate::ArraySql<Item = T1>,
-        T3: crate::StringSql,
+        T3: crate::BytesSql,
         T4: crate::ArraySql<Item = T3>,
         T5: crate::StringSql,
     >(
@@ -610,7 +499,7 @@ impl<
     C: GenericClient,
     T1: crate::StringSql,
     T2: crate::ArraySql<Item = T1>,
-    T3: crate::StringSql,
+    T3: crate::BytesSql,
     T4: crate::ArraySql<Item = T3>,
     T5: crate::StringSql,
 >
@@ -634,7 +523,7 @@ impl<
 pub struct TouchUnihashesStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn touch_unihashes() -> TouchUnihashesStmt {
     TouchUnihashesStmt(
-        "UPDATE hashserv_unihash SET last_access = now() FROM unnest($1::text[], $2::text[]) AS \
+        "UPDATE hashserv_unihash SET last_access = now() FROM unnest($1::text[], $2::bytea[]) AS \
          requested (method, taskhash) WHERE hashserv_unihash.cache = $3::text AND \
          hashserv_unihash.method = requested.method AND hashserv_unihash.taskhash = \
          requested.taskhash AND hashserv_unihash.last_access < now() - interval '1 hour'",
@@ -656,7 +545,7 @@ impl TouchUnihashesStmt {
         C: GenericClient,
         T1: crate::StringSql,
         T2: crate::ArraySql<Item = T1>,
-        T3: crate::StringSql,
+        T3: crate::BytesSql,
         T4: crate::ArraySql<Item = T3>,
         T5: crate::StringSql,
     >(
@@ -674,7 +563,7 @@ impl<
     C: GenericClient + Send + Sync,
     T1: crate::StringSql,
     T2: crate::ArraySql<Item = T1>,
-    T3: crate::StringSql,
+    T3: crate::BytesSql,
     T4: crate::ArraySql<Item = T3>,
     T5: crate::StringSql,
 >
@@ -702,9 +591,10 @@ impl<
 pub struct ExistingUnihashesStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn existing_unihashes() -> ExistingUnihashesStmt {
     ExistingUnihashesStmt(
-        "SELECT requested.position FROM unnest($1::text[]) WITH ORDINALITY AS requested (unihash, \
-         position) WHERE EXISTS ( SELECT FROM hashserv_unihash WHERE hashserv_unihash.cache = \
-         any($2::text[]) AND hashserv_unihash.unihash = requested.unihash )",
+        "SELECT requested.position FROM unnest($1::bytea[]) WITH ORDINALITY AS requested \
+         (unihash, position) WHERE EXISTS ( SELECT FROM hashserv_unihash WHERE \
+         hashserv_unihash.cache = any($2::text[]) AND hashserv_unihash.unihash = \
+         requested.unihash )",
         None,
     )
 }
@@ -721,7 +611,7 @@ impl ExistingUnihashesStmt {
         'a,
         's,
         C: GenericClient,
-        T1: crate::StringSql,
+        T1: crate::BytesSql,
         T2: crate::ArraySql<Item = T1>,
         T3: crate::StringSql,
         T4: crate::ArraySql<Item = T3>,
@@ -746,7 +636,7 @@ impl<
     'a,
     's,
     C: GenericClient,
-    T1: crate::StringSql,
+    T1: crate::BytesSql,
     T2: crate::ArraySql<Item = T1>,
     T3: crate::StringSql,
     T4: crate::ArraySql<Item = T3>,
@@ -771,11 +661,12 @@ impl<
 pub struct FindTaskStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn find_task() -> FindTaskStmt {
     FindTaskStmt(
-        "SELECT hashserv_outhash.outhash, hashserv_outhash.created_at, hashserv_outhash.owner, \
-         hashserv_outhash.pn, hashserv_outhash.pv, hashserv_outhash.pr, hashserv_outhash.task, \
-         hashserv_outhash.outhash_siginfo, hashserv_unihash.unihash FROM hashserv_outhash JOIN \
-         hashserv_unihash USING (cache, method, taskhash) WHERE hashserv_outhash.cache = $1::text \
-         AND hashserv_outhash.method = $2::text AND hashserv_outhash.taskhash = $3::text ORDER BY \
+        "SELECT hashserv_outhash.taskhash, hashserv_outhash.outhash, hashserv_unihash.unihash, \
+         hashserv_outhash.created_at, hashserv_outhash.owner, hashserv_outhash.pn, \
+         hashserv_outhash.pv, hashserv_outhash.pr, hashserv_outhash.task, \
+         hashserv_outhash.outhash_siginfo FROM hashserv_outhash JOIN hashserv_unihash USING \
+         (cache, method, taskhash) WHERE hashserv_outhash.cache = $1::text AND \
+         hashserv_outhash.method = $2::text AND hashserv_outhash.taskhash = $3::bytea ORDER BY \
          hashserv_outhash.created_at LIMIT 1",
         None,
     )
@@ -795,44 +686,46 @@ impl FindTaskStmt {
         C: GenericClient,
         T1: crate::StringSql,
         T2: crate::StringSql,
-        T3: crate::StringSql,
+        T3: crate::BytesSql,
     >(
         &'s self,
         client: &'c C,
         cache: &'a T1,
         method: &'a T2,
         taskhash: &'a T3,
-    ) -> FindTaskQuery<'c, 'a, 's, C, FindTask, 3> {
-        FindTaskQuery {
+    ) -> HashservReportQuery<'c, 'a, 's, C, HashservReport, 3> {
+        HashservReportQuery {
             client,
             params: [cache, method, taskhash],
             query: self.0,
             cached: self.1.as_ref(),
-            extractor:
-                |row: &tokio_postgres::Row| -> Result<FindTaskBorrowed, tokio_postgres::Error> {
-                    Ok(FindTaskBorrowed {
-                        outhash: row.try_get(0)?,
-                        created_at: row.try_get(1)?,
-                        owner: row.try_get(2)?,
-                        pn: row.try_get(3)?,
-                        pv: row.try_get(4)?,
-                        pr: row.try_get(5)?,
-                        task: row.try_get(6)?,
-                        outhash_siginfo: row.try_get(7)?,
-                        unihash: row.try_get(8)?,
-                    })
-                },
-            mapper: |it| FindTask::from(it),
+            extractor: |
+                row: &tokio_postgres::Row,
+            | -> Result<HashservReportBorrowed, tokio_postgres::Error> {
+                Ok(HashservReportBorrowed {
+                    taskhash: row.try_get(0)?,
+                    outhash: row.try_get(1)?,
+                    unihash: row.try_get(2)?,
+                    created_at: row.try_get(3)?,
+                    owner: row.try_get(4)?,
+                    pn: row.try_get(5)?,
+                    pv: row.try_get(6)?,
+                    pr: row.try_get(7)?,
+                    task: row.try_get(8)?,
+                    outhash_siginfo: row.try_get(9)?,
+                })
+            },
+            mapper: |it| HashservReport::from(it),
         }
     }
 }
-impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql, T2: crate::StringSql, T3: crate::StringSql>
+impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql, T2: crate::StringSql, T3: crate::BytesSql>
     crate::client::async_::Params<
         'c,
         'a,
         's,
         FindTaskParams<T1, T2, T3>,
-        FindTaskQuery<'c, 'a, 's, C, FindTask, 3>,
+        HashservReportQuery<'c, 'a, 's, C, HashservReport, 3>,
         C,
     > for FindTaskStmt
 {
@@ -840,19 +733,19 @@ impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql, T2: crate::StringSql, T
         &'s self,
         client: &'c C,
         params: &'a FindTaskParams<T1, T2, T3>,
-    ) -> FindTaskQuery<'c, 'a, 's, C, FindTask, 3> {
+    ) -> HashservReportQuery<'c, 'a, 's, C, HashservReport, 3> {
         self.bind(client, &params.cache, &params.method, &params.taskhash)
     }
 }
 pub struct FindOuthashStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn find_outhash() -> FindOuthashStmt {
     FindOuthashStmt(
-        "SELECT hashserv_outhash.taskhash, hashserv_outhash.created_at, hashserv_outhash.owner, \
-         hashserv_outhash.pn, hashserv_outhash.pv, hashserv_outhash.pr, hashserv_outhash.task, \
-         hashserv_outhash.outhash_siginfo, hashserv_unihash.unihash FROM hashserv_outhash LEFT \
-         JOIN hashserv_unihash USING (cache, method, taskhash) WHERE hashserv_outhash.cache = \
-         $1::text AND hashserv_outhash.method = $2::text AND hashserv_outhash.outhash = $3::text \
-         AND (NOT $4::boolean OR hashserv_unihash.unihash IS NOT NULL) ORDER BY \
+        "SELECT hashserv_outhash.taskhash, hashserv_outhash.outhash, hashserv_unihash.unihash, \
+         hashserv_outhash.created_at, hashserv_outhash.owner, hashserv_outhash.pn, \
+         hashserv_outhash.pv, hashserv_outhash.pr, hashserv_outhash.task, \
+         hashserv_outhash.outhash_siginfo FROM hashserv_outhash JOIN hashserv_unihash USING \
+         (cache, method, taskhash) WHERE hashserv_outhash.cache = $1::text AND \
+         hashserv_outhash.method = $2::text AND hashserv_outhash.outhash = $3::bytea ORDER BY \
          hashserv_outhash.created_at LIMIT 1",
         None,
     )
@@ -872,45 +765,46 @@ impl FindOuthashStmt {
         C: GenericClient,
         T1: crate::StringSql,
         T2: crate::StringSql,
-        T3: crate::StringSql,
+        T3: crate::BytesSql,
     >(
         &'s self,
         client: &'c C,
         cache: &'a T1,
         method: &'a T2,
         outhash: &'a T3,
-        with_unihash: &'a bool,
-    ) -> FindOuthashQuery<'c, 'a, 's, C, FindOuthash, 4> {
-        FindOuthashQuery {
+    ) -> HashservReportQuery<'c, 'a, 's, C, HashservReport, 3> {
+        HashservReportQuery {
             client,
-            params: [cache, method, outhash, with_unihash],
+            params: [cache, method, outhash],
             query: self.0,
             cached: self.1.as_ref(),
-            extractor:
-                |row: &tokio_postgres::Row| -> Result<FindOuthashBorrowed, tokio_postgres::Error> {
-                    Ok(FindOuthashBorrowed {
-                        taskhash: row.try_get(0)?,
-                        created_at: row.try_get(1)?,
-                        owner: row.try_get(2)?,
-                        pn: row.try_get(3)?,
-                        pv: row.try_get(4)?,
-                        pr: row.try_get(5)?,
-                        task: row.try_get(6)?,
-                        outhash_siginfo: row.try_get(7)?,
-                        unihash: row.try_get(8)?,
-                    })
-                },
-            mapper: |it| FindOuthash::from(it),
+            extractor: |
+                row: &tokio_postgres::Row,
+            | -> Result<HashservReportBorrowed, tokio_postgres::Error> {
+                Ok(HashservReportBorrowed {
+                    taskhash: row.try_get(0)?,
+                    outhash: row.try_get(1)?,
+                    unihash: row.try_get(2)?,
+                    created_at: row.try_get(3)?,
+                    owner: row.try_get(4)?,
+                    pn: row.try_get(5)?,
+                    pv: row.try_get(6)?,
+                    pr: row.try_get(7)?,
+                    task: row.try_get(8)?,
+                    outhash_siginfo: row.try_get(9)?,
+                })
+            },
+            mapper: |it| HashservReport::from(it),
         }
     }
 }
-impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql, T2: crate::StringSql, T3: crate::StringSql>
+impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql, T2: crate::StringSql, T3: crate::BytesSql>
     crate::client::async_::Params<
         'c,
         'a,
         's,
         FindOuthashParams<T1, T2, T3>,
-        FindOuthashQuery<'c, 'a, 's, C, FindOuthash, 4>,
+        HashservReportQuery<'c, 'a, 's, C, HashservReport, 3>,
         C,
     > for FindOuthashStmt
 {
@@ -918,21 +812,15 @@ impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql, T2: crate::StringSql, T
         &'s self,
         client: &'c C,
         params: &'a FindOuthashParams<T1, T2, T3>,
-    ) -> FindOuthashQuery<'c, 'a, 's, C, FindOuthash, 4> {
-        self.bind(
-            client,
-            &params.cache,
-            &params.method,
-            &params.outhash,
-            &params.with_unihash,
-        )
+    ) -> HashservReportQuery<'c, 'a, 's, C, HashservReport, 3> {
+        self.bind(client, &params.cache, &params.method, &params.outhash)
     }
 }
 pub struct InsertOuthashStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn insert_outhash() -> InsertOuthashStmt {
     InsertOuthashStmt(
         "INSERT INTO hashserv_outhash (cache, method, taskhash, outhash, owner, pn, pv, pr, task, \
-         outhash_siginfo) VALUES ( $1::text, $2::text, $3::text, $4::text, $5::text, $6::text, \
+         outhash_siginfo) VALUES ( $1::text, $2::text, $3::bytea, $4::bytea, $5::text, $6::text, \
          $7::text, $8::text, $9::text, $10::text ) ON CONFLICT DO NOTHING",
         None,
     )
@@ -952,8 +840,8 @@ impl InsertOuthashStmt {
         C: GenericClient,
         T1: crate::StringSql,
         T2: crate::StringSql,
-        T3: crate::StringSql,
-        T4: crate::StringSql,
+        T3: crate::BytesSql,
+        T4: crate::BytesSql,
         T5: crate::StringSql,
         T6: crate::StringSql,
         T7: crate::StringSql,
@@ -998,8 +886,8 @@ impl<
     C: GenericClient + Send + Sync,
     T1: crate::StringSql,
     T2: crate::StringSql,
-    T3: crate::StringSql,
-    T4: crate::StringSql,
+    T3: crate::BytesSql,
+    T4: crate::BytesSql,
     T5: crate::StringSql,
     T6: crate::StringSql,
     T7: crate::StringSql,
@@ -1045,8 +933,8 @@ pub fn find_equivalent() -> FindEquivalentStmt {
     FindEquivalentStmt(
         "SELECT hashserv_unihash.unihash FROM hashserv_outhash JOIN hashserv_unihash USING \
          (cache, method, taskhash) WHERE hashserv_outhash.cache = $1::text AND \
-         hashserv_outhash.method = $2::text AND hashserv_outhash.outhash = $3::text AND \
-         hashserv_outhash.taskhash != $4::text ORDER BY hashserv_outhash.created_at LIMIT 1",
+         hashserv_outhash.method = $2::text AND hashserv_outhash.outhash = $3::bytea AND \
+         hashserv_outhash.taskhash != $4::bytea ORDER BY hashserv_outhash.created_at LIMIT 1",
         None,
     )
 }
@@ -1065,8 +953,8 @@ impl FindEquivalentStmt {
         C: GenericClient,
         T1: crate::StringSql,
         T2: crate::StringSql,
-        T3: crate::StringSql,
-        T4: crate::StringSql,
+        T3: crate::BytesSql,
+        T4: crate::BytesSql,
     >(
         &'s self,
         client: &'c C,
@@ -1074,8 +962,8 @@ impl FindEquivalentStmt {
         method: &'a T2,
         outhash: &'a T3,
         taskhash: &'a T4,
-    ) -> StringQuery<'c, 'a, 's, C, String, 4> {
-        StringQuery {
+    ) -> Vecu8Query<'c, 'a, 's, C, Vec<u8>, 4> {
+        Vecu8Query {
             client,
             params: [cache, method, outhash, taskhash],
             query: self.0,
@@ -1092,15 +980,15 @@ impl<
     C: GenericClient,
     T1: crate::StringSql,
     T2: crate::StringSql,
-    T3: crate::StringSql,
-    T4: crate::StringSql,
+    T3: crate::BytesSql,
+    T4: crate::BytesSql,
 >
     crate::client::async_::Params<
         'c,
         'a,
         's,
         FindEquivalentParams<T1, T2, T3, T4>,
-        StringQuery<'c, 'a, 's, C, String, 4>,
+        Vecu8Query<'c, 'a, 's, C, Vec<u8>, 4>,
         C,
     > for FindEquivalentStmt
 {
@@ -1108,7 +996,7 @@ impl<
         &'s self,
         client: &'c C,
         params: &'a FindEquivalentParams<T1, T2, T3, T4>,
-    ) -> StringQuery<'c, 'a, 's, C, String, 4> {
+    ) -> Vecu8Query<'c, 'a, 's, C, Vec<u8>, 4> {
         self.bind(
             client,
             &params.cache,
@@ -1122,7 +1010,7 @@ pub struct InsertUnihashStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn insert_unihash() -> InsertUnihashStmt {
     InsertUnihashStmt(
         "INSERT INTO hashserv_unihash (cache, method, taskhash, unihash) VALUES ($1::text, \
-         $2::text, $3::text, $4::text) ON CONFLICT DO NOTHING",
+         $2::text, $3::bytea, $4::bytea) ON CONFLICT DO NOTHING",
         None,
     )
 }
@@ -1141,8 +1029,8 @@ impl InsertUnihashStmt {
         C: GenericClient,
         T1: crate::StringSql,
         T2: crate::StringSql,
-        T3: crate::StringSql,
-        T4: crate::StringSql,
+        T3: crate::BytesSql,
+        T4: crate::BytesSql,
     >(
         &'s self,
         client: &'c C,
@@ -1161,8 +1049,8 @@ impl<
     C: GenericClient + Send + Sync,
     T1: crate::StringSql,
     T2: crate::StringSql,
-    T3: crate::StringSql,
-    T4: crate::StringSql,
+    T3: crate::BytesSql,
+    T4: crate::BytesSql,
 >
     crate::client::async_::Params<
         'a,
@@ -1195,7 +1083,7 @@ pub struct FindUnihashStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn find_unihash() -> FindUnihashStmt {
     FindUnihashStmt(
         "SELECT unihash FROM hashserv_unihash WHERE cache = $1::text AND method = $2::text AND \
-         taskhash = $3::text",
+         taskhash = $3::bytea",
         None,
     )
 }
@@ -1214,15 +1102,15 @@ impl FindUnihashStmt {
         C: GenericClient,
         T1: crate::StringSql,
         T2: crate::StringSql,
-        T3: crate::StringSql,
+        T3: crate::BytesSql,
     >(
         &'s self,
         client: &'c C,
         cache: &'a T1,
         method: &'a T2,
         taskhash: &'a T3,
-    ) -> StringQuery<'c, 'a, 's, C, String, 3> {
-        StringQuery {
+    ) -> Vecu8Query<'c, 'a, 's, C, Vec<u8>, 3> {
+        Vecu8Query {
             client,
             params: [cache, method, taskhash],
             query: self.0,
@@ -1232,13 +1120,13 @@ impl FindUnihashStmt {
         }
     }
 }
-impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql, T2: crate::StringSql, T3: crate::StringSql>
+impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql, T2: crate::StringSql, T3: crate::BytesSql>
     crate::client::async_::Params<
         'c,
         'a,
         's,
         FindUnihashParams<T1, T2, T3>,
-        StringQuery<'c, 'a, 's, C, String, 3>,
+        Vecu8Query<'c, 'a, 's, C, Vec<u8>, 3>,
         C,
     > for FindUnihashStmt
 {
@@ -1246,7 +1134,7 @@ impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql, T2: crate::StringSql, T
         &'s self,
         client: &'c C,
         params: &'a FindUnihashParams<T1, T2, T3>,
-    ) -> StringQuery<'c, 'a, 's, C, String, 3> {
+    ) -> Vecu8Query<'c, 'a, 's, C, Vec<u8>, 3> {
         self.bind(client, &params.cache, &params.method, &params.taskhash)
     }
 }
@@ -1294,31 +1182,5 @@ impl<'a, C: GenericClient + Send + Sync, T1: crate::StringSql>
         Box<dyn futures::Future<Output = Result<u64, tokio_postgres::Error>> + Send + 'a>,
     > {
         Box::pin(self.bind(client, &params.cache, &params.cutoff))
-    }
-}
-pub struct DeleteOrphanOuthashesStmt(&'static str, Option<tokio_postgres::Statement>);
-pub fn delete_orphan_outhashes() -> DeleteOrphanOuthashesStmt {
-    DeleteOrphanOuthashesStmt(
-        "DELETE FROM hashserv_outhash WHERE cache = $1::text AND NOT EXISTS ( SELECT FROM \
-         hashserv_unihash WHERE hashserv_unihash.cache = hashserv_outhash.cache AND \
-         hashserv_unihash.method = hashserv_outhash.method AND hashserv_unihash.taskhash = \
-         hashserv_outhash.taskhash )",
-        None,
-    )
-}
-impl DeleteOrphanOuthashesStmt {
-    pub async fn prepare<'a, C: GenericClient>(
-        mut self,
-        client: &'a C,
-    ) -> Result<Self, tokio_postgres::Error> {
-        self.1 = Some(client.prepare(self.0).await?);
-        Ok(self)
-    }
-    pub async fn bind<'c, 'a, 's, C: GenericClient, T1: crate::StringSql>(
-        &'s self,
-        client: &'c C,
-        cache: &'a T1,
-    ) -> Result<u64, tokio_postgres::Error> {
-        client.execute(self.0, &[cache]).await
     }
 }
