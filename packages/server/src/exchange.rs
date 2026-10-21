@@ -4,11 +4,14 @@ use core::time::Duration;
 
 use jsonwebtoken::dangerous::insecure_decode_claims;
 use jsonwebtoken::errors::Error as JwtError;
+use opentelemetry::metrics::Counter;
+use opentelemetry::{KeyValue, global};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::cache::CacheName;
 use crate::oidc::{Issuer, VerifyError};
+use crate::telemetry::SCOPE;
 use crate::tiers::Tiers;
 use crate::token::{Grant, TokenKey};
 
@@ -44,20 +47,45 @@ pub(crate) struct Exchange {
     tiers: Tiers,
     /// The key that signs granary tokens.
     key: TokenKey,
+    /// Exchanges by outcome.
+    exchanges: Counter<u64>,
 }
 
 impl Exchange {
     /// Creates the exchange.
-    pub(crate) const fn new(issuers: Vec<Issuer>, tiers: Tiers, key: TokenKey) -> Self {
+    pub(crate) fn new(issuers: Vec<Issuer>, tiers: Tiers, key: TokenKey) -> Self {
+        let exchanges = global::meter(SCOPE)
+            .u64_counter("granary.token.exchanges")
+            .with_description("ID token exchanges by outcome")
+            .build();
         Self {
             issuers,
             tiers,
             key,
+            exchanges,
         }
     }
 
     /// Verifies an ID token and issues a granary token for its tier.
     pub(crate) async fn exchange(&self, id_token: &str) -> Result<Issued, ExchangeError> {
+        let result = self.issue(id_token).await;
+        match &result {
+            Ok(issued) => self.exchanges.add(
+                1,
+                &[
+                    KeyValue::new("result", "issued"),
+                    KeyValue::new("tier", issued.tier.clone()),
+                ],
+            ),
+            Err(err) => self
+                .exchanges
+                .add(1, &[KeyValue::new("result", err.result())]),
+        }
+        result
+    }
+
+    /// Verifies an ID token and signs a granary token.
+    async fn issue(&self, id_token: &str) -> Result<Issued, ExchangeError> {
         let iss = insecure_decode_claims::<Unverified>(id_token)
             .map_err(ExchangeError::Malformed)?
             .iss;
@@ -114,6 +142,20 @@ pub(crate) enum ExchangeError {
     /// The ID token failed verification.
     #[error("the ID token failed verification")]
     Verify(#[from] VerifyError),
+}
+
+impl ExchangeError {
+    /// The value of the `result` attribute.
+    const fn result(&self) -> &'static str {
+        match self {
+            Self::Malformed(_) => "malformed",
+            Self::NoTier { sub: _ } => "no_tier",
+            Self::Sign(_) => "error",
+            Self::UnknownIssuer(_) => "unknown_issuer",
+            Self::Verify(VerifyError::Fetch { url: _, source: _ }) => "issuer_unavailable",
+            Self::Verify(_) => "invalid",
+        }
+    }
 }
 
 #[cfg(test)]
