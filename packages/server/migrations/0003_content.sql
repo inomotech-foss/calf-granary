@@ -9,10 +9,13 @@ CREATE TABLE chunk (
     state chunk_state NOT NULL DEFAULT 'valid',
     touched_at timestamptz NOT NULL DEFAULT now(),
     created_at timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (store, object_key)
+    UNIQUE (store, object_key),
+    CHECK (compression <> 'plain' OR stored_size = size)
 );
 
 CREATE UNIQUE INDEX chunk_valid_hash ON chunk (hash) WHERE state = 'valid';
+
+CREATE INDEX chunk_deleting ON chunk (id) WHERE state = 'deleting';
 
 CREATE TABLE blob (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
