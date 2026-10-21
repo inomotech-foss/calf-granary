@@ -11,7 +11,12 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-axum = { workspace = true, features = ["http1", "json", "tokio"] }
+axum = { workspace = true, features = [
+  "http1",
+  "json",
+  "matched-path",
+  "tokio",
+] }
 bytes = { workspace = true }
 calf-granary-server-db = { workspace = true, features = ["deadpool"] }
 chrono = { workspace = true, features = ["clock"] }
