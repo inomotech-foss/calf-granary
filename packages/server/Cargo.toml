@@ -19,6 +19,19 @@ deadpool-postgres = { workspace = true, features = ["rt_tokio_1"] }
 futures = { workspace = true }
 jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
 object_store = { workspace = true, features = ["aws"] }
+opentelemetry = { workspace = true, features = [
+  "internal-logs",
+  "logs",
+  "metrics",
+  "trace",
+] }
+opentelemetry-appender-tracing = { workspace = true }
+opentelemetry_sdk = { workspace = true, features = [
+  "internal-logs",
+  "logs",
+  "metrics",
+  "trace",
+] }
 reqwest = { workspace = true, features = ["json", "rustls"] }
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["std"] }
@@ -26,10 +39,22 @@ thiserror = { workspace = true, features = ["std"] }
 tokio-postgres = { workspace = true, features = ["runtime"] }
 toml = { workspace = true, features = ["parse", "serde", "std"] }
 tracing = { workspace = true, features = ["std"] }
+tracing-opentelemetry = { workspace = true }
 
 [dependencies.clap]
 workspace = true
 features = ["derive", "env", "error-context", "help", "std", "usage"]
+
+[dependencies.opentelemetry-otlp]
+workspace = true
+features = [
+  "http-proto",
+  "internal-logs",
+  "logs",
+  "metrics",
+  "reqwest-blocking-client",
+  "trace",
+]
 
 [dependencies.tokio]
 workspace = true
@@ -37,7 +62,7 @@ features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"]
 
 [dependencies.tracing-subscriber]
 workspace = true
-features = ["ansi", "env-filter", "fmt", "std"]
+features = ["ansi", "env-filter", "fmt", "registry", "std"]
 
 [dev-dependencies]
 aws-lc-rs = { workspace = true, features = ["aws-lc-sys"] }

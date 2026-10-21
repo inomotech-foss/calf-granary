@@ -23,6 +23,10 @@ deadpool-postgres = { version = "0.14.2", default-features = false }
 futures = { version = "0.3.34", default-features = false }
 jsonwebtoken = { version = "11.1.0", default-features = false }
 object_store = { version = "0.14.2", default-features = false }
+opentelemetry = { version = "0.33.1", default-features = false }
+opentelemetry-appender-tracing = { version = "0.33.1", default-features = false }
+opentelemetry-otlp = { version = "0.33.1", default-features = false }
+opentelemetry_sdk = { version = "0.33.1", default-features = false }
 postgres = { version = "0.19.14", default-features = false }
 postgres-protocol = { version = "0.6.12", default-features = false }
 postgres-types = { version = "0.2.14", default-features = false }
@@ -35,6 +39,7 @@ tokio-postgres = { version = "0.7.18", default-features = false }
 toml = { version = "1.1.8", default-features = false }
 tower = { version = "0.5.3", default-features = false }
 tracing = { version = "0.1.44", default-features = false }
+tracing-opentelemetry = { version = "0.34.0", default-features = false }
 tracing-subscriber = { version = "0.3.23", default-features = false }
 
 [workspace.lints]

@@ -14,6 +14,7 @@ mod oidc;
 mod prune;
 mod serve;
 mod tasks;
+mod telemetry;
 #[cfg(test)]
 mod testing;
 mod tiers;
@@ -24,13 +25,13 @@ use core::error::Error;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use tracing_subscriber::EnvFilter;
-use tracing_subscriber::filter::LevelFilter;
+use tokio::task;
 
 use crate::database::DatabaseArgs;
 use crate::migrations::MigrationError;
 use crate::prune::{PruneArgs, PruneCommandError};
 use crate::serve::{ServeArgs, ServeError};
+use crate::telemetry::Telemetry;
 use crate::worker::{WorkerArgs, WorkerError};
 
 /// Build cache server for CI runners.
@@ -60,6 +61,16 @@ enum Command {
 }
 
 impl Command {
+    /// The `service.name` of the process in telemetry.
+    const fn service_name(&self) -> &'static str {
+        match self {
+            Self::Migrate { database: _ } => "migrate",
+            Self::Prune(_) => "prune",
+            Self::Serve(_) => "serve",
+            Self::Worker(_) => "worker",
+        }
+    }
+
     /// Runs the command.
     async fn run(self) -> Result<(), CommandError> {
         match self {
@@ -98,19 +109,25 @@ enum CommandError {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::builder()
-                .with_default_directive(LevelFilter::INFO.into())
-                .from_env_lossy(),
-        )
-        .init();
+    let command = Cli::parse().command;
+    let telemetry = match Telemetry::init(command.service_name()) {
+        Ok(telemetry) => telemetry,
+        Err(err) => {
+            Telemetry::fallback();
+            tracing::error!(error = &err as &dyn Error, "failed to set up telemetry");
+            return ExitCode::FAILURE;
+        }
+    };
 
-    match Cli::parse().command.run().await {
+    let code = match command.run().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             tracing::error!(error = &err as &dyn Error, "command failed");
             ExitCode::FAILURE
         }
+    };
+    if let Err(err) = task::spawn_blocking(move || telemetry.shutdown()).await {
+        tracing::error!(error = &err as &dyn Error, "failed to flush telemetry");
     }
+    code
 }
