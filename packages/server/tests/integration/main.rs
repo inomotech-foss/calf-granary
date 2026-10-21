@@ -17,3 +17,5 @@ mod objects;
 mod prune;
 #[cfg(test)]
 mod worker;
+#[cfg(test)]
+mod yocto;

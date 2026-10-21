@@ -25,7 +25,7 @@ features = ["derive", "env", "error-context", "help", "std", "usage"]
 
 [dependencies.tokio]
 workspace = true
-features = ["io-util", "macros", "process", "rt-multi-thread"]
+features = ["fs", "io-util", "macros", "process", "rt-multi-thread"]
 
 [dependencies.tracing-subscriber]
 workspace = true

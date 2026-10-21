@@ -8,6 +8,7 @@ use serde_json::json;
 use tokio_util::io::ReaderStream;
 
 use crate::nix::{self, NixError, PathInfo};
+use crate::target::Target;
 
 /// The header that carries the metadata of an uploaded NAR.
 const NAR_INFO_HEADER: &str = "x-granary-nar-info";
@@ -15,18 +16,9 @@ const NAR_INFO_HEADER: &str = "x-granary-nar-info";
 /// Command-line arguments of `nix push`.
 #[derive(Debug, Args)]
 pub(crate) struct PushArgs {
-    /// The granary server, such as `https://granary.example.org`.
-    #[arg(long, env = "GRANARY_SERVER")]
-    server: String,
-    /// The Nix cache to push to.
-    #[arg(long)]
-    cache: String,
-    /// A granary write token for the cache.
-    #[arg(long, env = "GRANARY_TOKEN", hide_env_values = true)]
-    token: String,
-    /// How many store paths are uploaded at the same time.
-    #[arg(long, default_value_t = 4)]
-    jobs: usize,
+    /// The Nix cache.
+    #[command(flatten)]
+    target: Target,
     /// The store paths to push, with everything they reference.
     #[arg(required = true)]
     paths: Vec<String>,
@@ -67,9 +59,11 @@ impl PushArgs {
             .filter_map(|path| nix::hash_part(path))
             .collect();
         let http = Client::new();
-        let server = self.server.trim_end_matches('/');
         let missing: Missing = http
-            .post(format!("{server}/_api/nix/{}/missing", self.cache))
+            .post(
+                self.target
+                    .url(&format!("_api/nix/{}/missing", self.target.cache())),
+            )
             .json(&json!({ "hashes": hashes }))
             .send()
             .await
@@ -88,22 +82,16 @@ impl PushArgs {
             .filter(|(path, _)| {
                 nix::hash_part(path).is_some_and(|hash| missing.missing.iter().any(|m| m == hash))
             })
-            .map(|(path, info)| self.upload(&http, server, path, info));
+            .map(|(path, info)| self.upload(&http, path, info));
         stream::iter(uploads)
-            .buffer_unordered(self.jobs.max(1))
+            .buffer_unordered(self.target.jobs())
             .try_collect::<Vec<()>>()
             .await?;
         Ok(())
     }
 
     /// Uploads the NAR of one store path.
-    async fn upload(
-        &self,
-        http: &Client,
-        server: &str,
-        path: &str,
-        info: &PathInfo,
-    ) -> Result<(), PushError> {
+    async fn upload(&self, http: &Client, path: &str, info: &PathInfo) -> Result<(), PushError> {
         let metadata = UploadInfo {
             store_path: path,
             references: &info.references,
@@ -117,8 +105,11 @@ impl PushArgs {
         let mut dump = nix::dump(path)?;
         let stdout = dump.stdout.take().ok_or(PushError::Dump)?;
         let response = http
-            .put(format!("{server}/_api/nix/{}/upload", self.cache))
-            .bearer_auth(&self.token)
+            .put(
+                self.target
+                    .url(&format!("_api/nix/{}/upload", self.target.cache())),
+            )
+            .bearer_auth(self.target.token())
             .header(NAR_INFO_HEADER, metadata)
             .body(Body::wrap_stream(ReaderStream::new(stdout)))
             .send()

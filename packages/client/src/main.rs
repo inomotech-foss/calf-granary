@@ -1,7 +1,9 @@
 //! Build cache client for CI runners.
 
 mod nix;
-mod push;
+mod nix_push;
+mod target;
+mod yocto;
 
 use core::error::Error;
 use std::io::{self, IsTerminal as _};
@@ -11,7 +13,8 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
 
-use crate::push::PushArgs;
+use crate::nix_push::PushArgs;
+use crate::yocto::YoctoCommand;
 
 /// Build cache client for CI runners.
 #[derive(Debug, Parser)]
@@ -30,6 +33,12 @@ enum Command {
         /// The Nix command to run.
         #[command(subcommand)]
         command: NixCommand,
+    },
+    /// Work with Yocto caches.
+    Yocto {
+        /// The Yocto command to run.
+        #[command(subcommand)]
+        command: YoctoCommand,
     },
 }
 
@@ -51,13 +60,16 @@ async fn main() -> ExitCode {
         .with_writer(io::stderr)
         .with_ansi(io::stderr().is_terminal())
         .init();
-    let Command::Nix {
-        command: NixCommand::Push(args),
-    } = Cli::parse().command;
-    match args.run().await {
+    let result: Result<(), Box<dyn Error>> = match Cli::parse().command {
+        Command::Nix {
+            command: NixCommand::Push(args),
+        } => args.run().await.map_err(Into::into),
+        Command::Yocto { command } => command.run().await.map_err(Into::into),
+    };
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            tracing::error!(error = &err as &dyn Error, "push failed");
+            tracing::error!(error = &*err, "push failed");
             ExitCode::FAILURE
         }
     }
