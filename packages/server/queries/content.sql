@@ -107,3 +107,9 @@ WHERE NOT EXISTS (
     SELECT FROM entry
     WHERE entry.key = requested.key AND entry.cache = any(:caches::text[])
 );
+
+--! store_sizes
+SELECT store, count(*) AS chunks, sum(stored_size)::bigint AS stored_bytes
+FROM chunk
+WHERE state = 'valid'
+GROUP BY store;

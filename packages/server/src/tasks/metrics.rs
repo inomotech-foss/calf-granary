@@ -2,7 +2,7 @@
 
 use core::time::Duration;
 
-use opentelemetry::metrics::{Counter, Histogram};
+use opentelemetry::metrics::{Counter, Gauge, Histogram};
 use opentelemetry::{KeyValue, global};
 
 use super::TaskKind;
@@ -26,6 +26,10 @@ pub(super) struct TaskMetrics {
     deleted_chunks: Counter<u64>,
     /// Stored bytes freed by collection.
     freed: Counter<u64>,
+    /// Stored bytes per store.
+    store_size: Gauge<u64>,
+    /// Chunks per store.
+    store_chunks: Gauge<u64>,
 }
 
 impl TaskMetrics {
@@ -52,6 +56,15 @@ impl TaskMetrics {
                 .with_unit("By")
                 .with_description("Stored content deleted by collection")
                 .build(),
+            store_size: meter
+                .u64_gauge("granary.store.size")
+                .with_unit("By")
+                .with_description("Stored content per store")
+                .build(),
+            store_chunks: meter
+                .u64_gauge("granary.store.chunks")
+                .with_description("Chunks per store")
+                .build(),
         }
     }
 
@@ -65,6 +78,13 @@ impl TaskMetrics {
     pub(super) fn collected(&self, stats: CollectStats) {
         self.deleted_chunks.add(stats.deleted_chunks, &[]);
         self.freed.add(stats.freed_bytes, &[]);
+    }
+
+    /// Records the size of a store.
+    pub(super) fn store(&self, store: &str, chunks: u64, bytes: u64) {
+        let attributes = [KeyValue::new("store", store.to_owned())];
+        self.store_size.record(bytes, &attributes);
+        self.store_chunks.record(chunks, &attributes);
     }
 
     /// Records a finished task run.

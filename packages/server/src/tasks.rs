@@ -4,13 +4,15 @@ mod metrics;
 
 use core::error::Error as _;
 use core::str::FromStr;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 use std::{env, process};
 
+use calf_granary_server_db::queries::content::{StoreSizes, store_sizes};
 use calf_granary_server_db::queries::prune::{record_prune_collection, record_prune_expiry};
 use chrono::Utc;
-use deadpool_postgres::{Pool, PoolError};
+use deadpool_postgres::{Client, Pool, PoolError};
 use tracing::Instrument as _;
 
 use self::metrics::TaskMetrics;
@@ -151,6 +153,27 @@ impl Runner {
             swept_objects,
             "collected unreferenced content"
         );
+        self.record_store_sizes(&client).await
+    }
+
+    /// Records the size of every configured store.
+    async fn record_store_sizes(&self, client: &Client) -> Result<(), TaskError> {
+        let sizes: BTreeMap<String, StoreSizes> = store_sizes()
+            .bind(client)
+            .all()
+            .await?
+            .into_iter()
+            .map(|row| (row.store.clone(), row))
+            .collect();
+        for store in self.content.store_names() {
+            let (chunks, bytes) = sizes.get(store.as_ref()).map_or((0, 0), |row| {
+                (
+                    u64::try_from(row.chunks).unwrap_or_default(),
+                    u64::try_from(row.stored_bytes).unwrap_or_default(),
+                )
+            });
+            self.metrics.store(store.as_ref(), chunks, bytes);
+        }
         Ok(())
     }
 }

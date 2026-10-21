@@ -21,7 +21,7 @@ pub(crate) use self::collect::{CollectError, CollectStats};
 pub(crate) use self::read::Encoding;
 pub(crate) use self::write::WriteError;
 use crate::hex;
-use crate::store::Stores;
+use crate::store::{StoreName, Stores};
 
 /// The prefix of chunk objects within a store.
 const CHUNK_PREFIX: &str = "chunks";
@@ -49,6 +49,11 @@ impl Content {
     /// Wraps the stores.
     pub(crate) const fn new(stores: Stores, grace: Duration) -> Self {
         Self { stores, grace }
+    }
+
+    /// The names of the configured stores.
+    pub(crate) fn store_names(&self) -> impl Iterator<Item = &StoreName> {
+        self.stores.iter().map(|(name, _)| name)
     }
 }
 
