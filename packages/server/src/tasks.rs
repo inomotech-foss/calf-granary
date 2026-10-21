@@ -1,6 +1,7 @@
 //! Background tasks recorded in Postgres.
 
 use core::error::Error as _;
+use core::str::FromStr;
 use std::sync::Arc;
 use std::{env, process};
 
@@ -25,6 +26,22 @@ impl TaskKind {
         }
     }
 }
+
+impl FromStr for TaskKind {
+    type Err = UnknownTaskKind;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        match name {
+            "prune" => Ok(Self::Prune),
+            _ => Err(UnknownTaskKind),
+        }
+    }
+}
+
+/// A task kind that this binary doesn't know.
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+#[error("unknown task kind")]
+pub(crate) struct UnknownTaskKind;
 
 /// Identifies the process that runs a task.
 #[derive(Clone, Debug, PartialEq, Eq)]

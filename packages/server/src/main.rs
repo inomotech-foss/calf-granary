@@ -17,6 +17,7 @@ mod tasks;
 mod testing;
 mod tiers;
 mod token;
+mod worker;
 
 use core::error::Error;
 use std::process::ExitCode;
@@ -29,6 +30,7 @@ use crate::database::DatabaseArgs;
 use crate::migrations::MigrationError;
 use crate::prune::{PruneArgs, PruneCommandError};
 use crate::serve::{ServeArgs, ServeError};
+use crate::worker::{WorkerArgs, WorkerError};
 
 /// Build cache server for CI runners.
 #[derive(Debug, Parser)]
@@ -52,6 +54,8 @@ enum Command {
     Prune(PruneArgs),
     /// Serve the caches over HTTP.
     Serve(ServeArgs),
+    /// Run scheduled and requested background tasks.
+    Worker(WorkerArgs),
 }
 
 impl Command {
@@ -66,6 +70,7 @@ impl Command {
             }
             Self::Prune(args) => Ok(args.run().await?),
             Self::Serve(args) => Ok(args.run().await?),
+            Self::Worker(args) => Ok(args.run().await?),
         }
     }
 }
@@ -85,6 +90,9 @@ enum CommandError {
     /// Serving failed.
     #[error(transparent)]
     Serve(#[from] ServeError),
+    /// The worker failed.
+    #[error(transparent)]
+    Worker(#[from] WorkerError),
 }
 
 #[tokio::main]
