@@ -20,6 +20,7 @@
         ./nix/integration.nix
         ./nix/rust-packages.nix
         ./nix/typescript.nix
+        ./nix/static.nix
       ];
 
       granary.ephemeris.cornucopia = {
