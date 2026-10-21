@@ -17,6 +17,7 @@ use axum::{Json, Router};
 use deadpool_postgres::{Client, Pool};
 use serde::{Deserialize, Serialize};
 
+use self::hashserv::HashservStats;
 use self::metrics::{Lookup, ObjectMetrics, Upload};
 use super::credential;
 use crate::access::{AccessLog, Accessed};
@@ -43,6 +44,8 @@ struct Objects {
     key: TokenKey,
     /// Records reads and writes.
     metrics: ObjectMetrics,
+    /// Request statistics of hashserv caches.
+    hashserv: Arc<HashservStats>,
 }
 
 /// A question about which keys a cache lacks.
@@ -150,6 +153,7 @@ pub(super) fn router(
             access,
             key,
             metrics: ObjectMetrics::new(),
+            hashserv: Arc::new(HashservStats::new()),
         })
 }
 

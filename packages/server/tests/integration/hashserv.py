@@ -66,4 +66,14 @@ try:
 except InvokeError:
     pass
 
+stats = main.get_stats()["requests"]
+check(stats["num"] > 0 and stats["max_time"] >= stats["average"] > 0, f"statistics: {stats}")
+check(main.reset_stats()["requests"]["num"] == stats["num"] + 1, "reset answers the old statistics")
+check(main.get_stats()["requests"]["num"] == 1, "reset starts over")
+try:
+    anonymous.reset_stats()
+    check(False, "anonymous clients can't reset statistics")
+except InvokeError:
+    pass
+
 print("ok")

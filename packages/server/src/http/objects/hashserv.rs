@@ -4,8 +4,11 @@
 //! token. Reports need `auth` with any username and a granary token that
 //! grants the cache as the password.
 
+mod stats;
+
 use core::error::Error;
 use core::time::Duration;
+use std::time::Instant;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
@@ -18,6 +21,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio::time;
 
+pub(crate) use self::stats::HashservStats;
 use super::Objects;
 use crate::cache::{Cache, Protocol, Report};
 
@@ -356,7 +360,17 @@ impl Session<'_> {
             let Some((command, payload)) = request.into_iter().next() else {
                 return;
             };
-            match self.dispatch(&command, payload).await {
+            let start = Instant::now();
+            let streams = matches!(command.as_str(), "get-stream" | "exists-stream");
+            let result = self.dispatch(&command, payload).await;
+            if !streams {
+                self.handler.state.hashserv.record(
+                    self.handler.cache.name().as_ref(),
+                    &command,
+                    start.elapsed().as_secs_f64(),
+                );
+            }
+            match result {
                 Ok(Some(reply)) => {
                     if !self.send(reply.to_string()).await {
                         return;
@@ -429,9 +443,28 @@ impl Session<'_> {
             "become-user" => {
                 return Err(Failure::Invoke("granary has no users to become".to_owned()));
             }
-            "get-stats" | "reset-stats" => json!({
-                "requests": { "num": 0, "total_time": 0.0, "max_time": 0.0, "average": 0.0, "stdev": 0.0 }
-            }),
+            "get-stats" => self
+                .handler
+                .state
+                .hashserv
+                .get(self.handler.cache.name().as_ref()),
+            "reset-stats" => {
+                if !self
+                    .handler
+                    .login
+                    .as_ref()
+                    .is_some_and(|login| login.can_report)
+                {
+                    return Err(Failure::Invoke(format!(
+                        "{} is not allowed to access permissions(s) @db-admin",
+                        self.handler.who()
+                    )));
+                }
+                self.handler
+                    .state
+                    .hashserv
+                    .reset(self.handler.cache.name().as_ref())
+            }
             "backfill-wait" => json!({ "tasks": 0 }),
             unsupported if UNSUPPORTED.contains(&unsupported) => {
                 return Err(Failure::Invoke(format!(
