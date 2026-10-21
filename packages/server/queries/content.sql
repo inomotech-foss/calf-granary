@@ -16,14 +16,14 @@ VALUES (
 )
 ON CONFLICT (hash) WHERE state = 'valid' DO UPDATE
 SET touched_at = now()
-RETURNING id, object_key;
+RETURNING id, old.id IS NULL AS inserted;
 
 --! insert_blob
 INSERT INTO blob (hash, size)
 VALUES (:hash::bytea, :size::bigint)
 ON CONFLICT (hash) DO UPDATE
 SET touched_at = now()
-RETURNING id, (xmax::text = '0') AS inserted;
+RETURNING id, old.id IS NULL AS inserted;
 
 --! insert_blob_chunks
 INSERT INTO blob_chunk (blob_id, seq, chunk_id)

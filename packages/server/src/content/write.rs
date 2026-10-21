@@ -104,7 +104,7 @@ impl Content {
                 return Err(WriteError::Database(err));
             }
         };
-        if chunk.object_key != key.as_ref() {
+        if !chunk.inserted {
             discard(objects.as_ref(), &key).await;
         }
         Ok(NewBlob {
@@ -274,7 +274,7 @@ async fn store_chunk(
             return Err(err);
         }
     };
-    if row.object_key != key.as_ref() {
+    if !row.inserted {
         discard(objects, &key).await;
     }
     Ok(row.id)

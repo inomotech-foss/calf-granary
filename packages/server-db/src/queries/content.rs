@@ -100,22 +100,10 @@ pub struct MoveChunkParams<
     pub store: T3,
     pub old_key: T4,
 }
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub struct InsertChunk {
     pub id: i64,
-    pub object_key: String,
-}
-pub struct InsertChunkBorrowed<'a> {
-    pub id: i64,
-    pub object_key: &'a str,
-}
-impl<'a> From<InsertChunkBorrowed<'a>> for InsertChunk {
-    fn from(InsertChunkBorrowed { id, object_key }: InsertChunkBorrowed<'a>) -> Self {
-        Self {
-            id,
-            object_key: object_key.into(),
-        }
-    }
+    pub inserted: bool,
 }
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub struct InsertBlob {
@@ -344,17 +332,14 @@ pub struct InsertChunkQuery<'c, 'a, 's, C: GenericClient, T, const N: usize> {
     params: [&'a (dyn postgres_types::ToSql + Sync); N],
     query: &'static str,
     cached: Option<&'s tokio_postgres::Statement>,
-    extractor: fn(&tokio_postgres::Row) -> Result<InsertChunkBorrowed, tokio_postgres::Error>,
-    mapper: fn(InsertChunkBorrowed) -> T,
+    extractor: fn(&tokio_postgres::Row) -> Result<InsertChunk, tokio_postgres::Error>,
+    mapper: fn(InsertChunk) -> T,
 }
 impl<'c, 'a, 's, C, T: 'c, const N: usize> InsertChunkQuery<'c, 'a, 's, C, T, N>
 where
     C: GenericClient,
 {
-    pub fn map<R>(
-        self,
-        mapper: fn(InsertChunkBorrowed) -> R,
-    ) -> InsertChunkQuery<'c, 'a, 's, C, R, N> {
+    pub fn map<R>(self, mapper: fn(InsertChunk) -> R) -> InsertChunkQuery<'c, 'a, 's, C, R, N> {
         InsertChunkQuery {
             client: self.client,
             params: self.params,
@@ -1100,7 +1085,7 @@ pub fn insert_chunk() -> InsertChunkStmt {
         "INSERT INTO chunk (hash, size, compression, stored_size, store, object_key) VALUES ( \
          $1::bytea, $2::bigint, $3::chunk_compression, $4::bigint, $5::text, $6::text ) ON \
          CONFLICT (hash) WHERE state = 'valid' DO UPDATE SET touched_at = now() RETURNING id, \
-         object_key",
+         old.id IS NULL AS inserted",
         None,
     )
 }
@@ -1135,13 +1120,12 @@ impl InsertChunkStmt {
             params: [hash, size, compression, stored_size, store, object_key],
             query: self.0,
             cached: self.1.as_ref(),
-            extractor:
-                |row: &tokio_postgres::Row| -> Result<InsertChunkBorrowed, tokio_postgres::Error> {
-                    Ok(InsertChunkBorrowed {
-                        id: row.try_get(0)?,
-                        object_key: row.try_get(1)?,
-                    })
-                },
+            extractor: |row: &tokio_postgres::Row| -> Result<InsertChunk, tokio_postgres::Error> {
+                Ok(InsertChunk {
+                    id: row.try_get(0)?,
+                    inserted: row.try_get(1)?,
+                })
+            },
             mapper: |it| InsertChunk::from(it),
         }
     }
@@ -1176,7 +1160,7 @@ pub struct InsertBlobStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn insert_blob() -> InsertBlobStmt {
     InsertBlobStmt(
         "INSERT INTO blob (hash, size) VALUES ($1::bytea, $2::bigint) ON CONFLICT (hash) DO \
-         UPDATE SET touched_at = now() RETURNING id, (xmax::text = '0') AS inserted",
+         UPDATE SET touched_at = now() RETURNING id, old.id IS NULL AS inserted",
         None,
     )
 }
