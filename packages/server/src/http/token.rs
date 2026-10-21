@@ -7,12 +7,12 @@ use axum::extract::State;
 use axum::http::header::HOST;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse as _, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Serialize;
 
 use super::bearer;
-use crate::cache::{Cache, Caches, Protocol};
+use crate::cache::{Cache, CacheName, Caches, Protocol};
 use crate::exchange::{Exchange, ExchangeError};
 use crate::oidc::VerifyError;
 
@@ -37,7 +37,27 @@ impl ExchangeError {
     }
 }
 
+impl Tokens {
+    /// The URL that clients reach the server at, without a trailing slash.
+    fn base_url(&self, headers: &HeaderMap) -> String {
+        let base = self
+            .public_url
+            .as_deref()
+            .map_or_else(|| request_url(headers), ToOwned::to_owned);
+        base.trim_end_matches('/').to_owned()
+    }
+}
+
 /// Builds the router for the token exchange.
+/// What clients learn about the caches besides their grants.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CacheDirectory {
+    /// The URL that clients reach the server at, if configured.
+    pub(crate) public_url: Option<String>,
+    /// The caches that jobs without an ID token read from.
+    pub(crate) anonymous: Vec<CacheName>,
+}
+
 /// Shared state of the token route.
 #[derive(Clone, Debug)]
 struct Tokens {
@@ -47,6 +67,8 @@ struct Tokens {
     caches: Arc<Caches>,
     /// The URL that clients reach the server at, if configured.
     public_url: Option<Arc<str>>,
+    /// The caches that jobs without an ID token read from.
+    anonymous: Arc<[CacheName]>,
 }
 
 /// A granary token and the caches it grants.
@@ -59,6 +81,13 @@ struct TokenResponse {
     /// The tier that the ID token mapped to.
     tier: String,
     /// The caches that the token may write to and read through.
+    caches: Vec<CacheInfo>,
+}
+
+/// The caches that jobs without an ID token read from.
+#[derive(Debug, Serialize)]
+struct AnonymousResponse {
+    /// The caches.
     caches: Vec<CacheInfo>,
 }
 
@@ -82,15 +111,29 @@ struct CacheInfo {
 pub(super) fn router(
     exchange: Arc<Exchange>,
     caches: Arc<Caches>,
-    public_url: Option<String>,
+    directory: CacheDirectory,
 ) -> Router {
     Router::new()
         .route("/token", post(issue))
+        .route("/_api/caches", get(anonymous_caches))
         .with_state(Tokens {
             exchange,
             caches,
-            public_url: public_url.map(Into::into),
+            public_url: directory.public_url.map(Into::into),
+            anonymous: directory.anonymous.into(),
         })
+}
+
+/// Describes the caches that jobs without an ID token read from.
+async fn anonymous_caches(State(state): State<Tokens>, headers: HeaderMap) -> Response {
+    let base = state.base_url(&headers);
+    let caches = state
+        .anonymous
+        .iter()
+        .filter_map(|name| state.caches.get(name.as_ref()))
+        .map(|cache| describe(cache, &base))
+        .collect();
+    Json(AnonymousResponse { caches }).into_response()
 }
 
 /// Exchanges the ID token in the `Authorization` header.
@@ -100,16 +143,12 @@ async fn issue(State(state): State<Tokens>, headers: HeaderMap) -> Response {
     };
     match state.exchange.exchange(id_token).await {
         Ok(issued) => {
-            let base = state
-                .public_url
-                .as_deref()
-                .map_or_else(|| request_url(&headers), ToOwned::to_owned);
-            let base = base.trim_end_matches('/');
+            let base = state.base_url(&headers);
             let caches = issued
                 .caches
                 .iter()
                 .filter_map(|name| state.caches.get(name.as_ref()))
-                .map(|cache| describe(cache, base))
+                .map(|cache| describe(cache, &base))
                 .collect();
             Json(TokenResponse {
                 token: issued.token,
@@ -178,7 +217,7 @@ mod tests {
     use axum::http::HeaderValue;
 
     use super::*;
-    use crate::cache::{CacheName, NixCache};
+    use crate::cache::NixCache;
     use crate::nix::SigningKey;
     use crate::nix::signing_tests::TEST_KEY;
 

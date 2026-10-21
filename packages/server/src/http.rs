@@ -15,6 +15,7 @@ use base64::engine::general_purpose::STANDARD;
 use deadpool_postgres::Pool;
 
 use self::observe::RequestMetrics;
+pub(crate) use self::token::CacheDirectory;
 use crate::access::AccessLog;
 use crate::cache::Caches;
 use crate::content::Content;
@@ -31,7 +32,7 @@ pub(crate) fn router(
     access: Arc<AccessLog>,
     key: TokenKey,
     exchange: Arc<Exchange>,
-    public_url: Option<String>,
+    directory: CacheDirectory,
 ) -> Router {
     let observed = Router::new()
         .merge(objects::router(
@@ -41,7 +42,7 @@ pub(crate) fn router(
             access,
             key,
         ))
-        .merge(token::router(exchange, caches, public_url))
+        .merge(token::router(exchange, caches, directory))
         .route_layer(middleware::from_fn_with_state(
             RequestMetrics::new(),
             observe::observe,

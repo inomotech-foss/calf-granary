@@ -61,6 +61,10 @@ pub(crate) struct Config {
     /// Without it, `/token` derives URLs from the request's `Host` and
     /// `X-Forwarded-Proto` headers.
     public_url: Option<String>,
+    /// The caches that jobs without an ID token read from, such as pull
+    /// requests from forks.
+    #[serde(default)]
+    anonymous_caches: Vec<CacheName>,
     /// How long unreferenced chunks and blobs are kept, 24 hours by default.
     ///
     /// Uploads must finish within this time.
@@ -97,6 +101,15 @@ impl Config {
     /// Fails if a cache names an unknown store, or if a fallback names an
     /// unknown cache or a cache that has a fallback itself.
     pub(crate) fn caches(&self) -> Result<Caches, ConfigError> {
+        if let Some(cache) = self
+            .anonymous_caches
+            .iter()
+            .find(|cache| !self.caches.contains_key(*cache))
+        {
+            return Err(ConfigError::AnonymousCache {
+                cache: cache.clone(),
+            });
+        }
         for (name, cache) in &self.caches {
             match (&cache.store, cache.protocol) {
                 (Some(store), ProtocolName::Files | ProtocolName::Nix)
@@ -144,6 +157,11 @@ impl Config {
     /// The URL that clients reach the server at.
     pub(crate) fn public_url(&self) -> Option<&str> {
         self.public_url.as_deref()
+    }
+
+    /// The caches that jobs without an ID token read from.
+    pub(crate) fn anonymous_caches(&self) -> &[CacheName] {
+        &self.anonymous_caches
     }
 
     /// Sets up the token exchange.
@@ -282,6 +300,12 @@ impl CacheConfig {
 /// Errors from loading the configuration.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ConfigError {
+    /// An anonymous cache isn't configured.
+    #[error("anonymous_caches names the unknown cache {cache}")]
+    AnonymousCache {
+        /// The unknown cache.
+        cache: CacheName,
+    },
     /// A fallback names a missing cache or one with its own fallback.
     #[error("cache {cache} falls back to {fallback}, which is missing or has a fallback itself")]
     Fallback {
