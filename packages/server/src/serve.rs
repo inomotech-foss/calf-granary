@@ -15,7 +15,7 @@ use tokio::task::JoinError;
 
 use crate::access::AccessLog;
 use crate::config::{Config, ConfigError};
-use crate::database::DatabaseArgs;
+use crate::database::{DatabaseArgs, TlsError};
 use crate::http;
 use crate::migrations::{self, MigrationError};
 use crate::token::{ShortSecret, TokenSecretArgs};
@@ -46,7 +46,7 @@ impl ServeArgs {
         let config = Config::load(&self.config)?;
         let caches = config.caches()?;
         let exchange = config.exchange(key.clone())?;
-        let pool = self.database.pool().map_err(ServeError::Pool)?;
+        let pool = self.database.open()?.pool().map_err(ServeError::Pool)?;
         let client = pool.get().await.map_err(ServeError::Connect)?;
         migrations::verify(&client).await?;
         drop(client);
@@ -111,6 +111,9 @@ pub(crate) enum ServeError {
     /// The token secret is too short.
     #[error(transparent)]
     TokenSecret(#[from] ShortSecret),
+    /// TLS for Postgres can't be set up.
+    #[error(transparent)]
+    Tls(#[from] TlsError),
 }
 
 /// Resolves when the process receives SIGINT or SIGTERM.

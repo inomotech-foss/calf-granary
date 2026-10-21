@@ -38,10 +38,14 @@ opentelemetry_sdk = { workspace = true, features = [
   "trace",
 ] }
 reqwest = { workspace = true, features = ["json", "rustls"] }
+rustls = { workspace = true, features = ["aws_lc_rs", "std"] }
+rustls-pki-types = { workspace = true, features = ["std"] }
+rustls-platform-verifier = { workspace = true }
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["std"] }
 thiserror = { workspace = true, features = ["std"] }
 tokio-postgres = { workspace = true, features = ["runtime"] }
+tokio-postgres-rustls = { workspace = true, features = ["aws-lc-rs"] }
 toml = { workspace = true, features = ["parse", "serde", "std"] }
 tracing = { workspace = true, features = ["std"] }
 tracing-opentelemetry = { workspace = true }

@@ -28,7 +28,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use tokio::task;
 
-use crate::database::DatabaseArgs;
+use crate::database::{DatabaseArgs, TlsError};
 use crate::migrations::MigrationError;
 use crate::mint::{MintArgs, MintError};
 use crate::prune::{PruneArgs, PruneCommandError};
@@ -83,7 +83,11 @@ impl Command {
     async fn run(self) -> Result<(), CommandError> {
         match self {
             Self::Migrate { database } => {
-                let mut client = database.connect().await.map_err(CommandError::Connect)?;
+                let mut client = database
+                    .open()?
+                    .connect()
+                    .await
+                    .map_err(CommandError::Connect)?;
                 let count = migrations::migrate(&mut client).await?;
                 tracing::info!(count, "migrations applied");
                 Ok(())
@@ -117,6 +121,9 @@ enum CommandError {
     /// The worker failed.
     #[error(transparent)]
     Worker(#[from] WorkerError),
+    /// TLS for Postgres can't be set up.
+    #[error(transparent)]
+    Tls(#[from] TlsError),
 }
 
 #[tokio::main]

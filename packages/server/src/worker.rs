@@ -18,7 +18,7 @@ use tokio::sync::watch;
 use tokio::time::{self, MissedTickBehavior};
 
 use crate::config::{Config, ConfigError};
-use crate::database::DatabaseArgs;
+use crate::database::{DatabaseArgs, TlsError};
 use crate::migrations::{self, MigrationError};
 use crate::tasks::{Runner, TaskKind, WorkerId};
 
@@ -64,7 +64,8 @@ impl WorkerArgs {
     /// Refuses to start while migrations are pending.
     pub(crate) async fn run(self) -> Result<(), WorkerError> {
         let caches = Config::load(&self.config)?.caches()?;
-        let pool = self.database.pool().map_err(WorkerError::Pool)?;
+        let database = self.database.open()?;
+        let pool = database.pool().map_err(WorkerError::Pool)?;
         let client = pool.get().await.map_err(WorkerError::Connect)?;
         migrations::verify(&client).await?;
         drop(client);
@@ -80,7 +81,7 @@ impl WorkerArgs {
             stop_sender.send_replace(true);
         });
 
-        let wakeup = self.database.listen(TASK_CHANNEL);
+        let wakeup = database.listen(TASK_CHANNEL);
         let worker = Worker {
             id: WorkerId::current(),
             runner: Runner::new(pool.clone(), Arc::new(caches)),
@@ -233,4 +234,7 @@ pub(crate) enum WorkerError {
     /// Installing the signal handler failed.
     #[error("failed to install the SIGTERM handler")]
     Signal(#[source] io::Error),
+    /// TLS for Postgres can't be set up.
+    #[error(transparent)]
+    Tls(#[from] TlsError),
 }
