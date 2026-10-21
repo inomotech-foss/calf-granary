@@ -28,7 +28,7 @@ pub(crate) const EMPTY: &str = "stores = {}\ncaches = {}";
 const STORE: &str = "[stores.test]\nbucket = \"$bucket\"\nprefix = \"$prefix\"\n";
 
 /// The binary under test.
-const SERVER: &str = env!("CARGO_BIN_EXE_calf-granary-server");
+pub(crate) const SERVER_BIN: &str = env!("CARGO_BIN_EXE_calf-granary-server");
 
 /// The token secret of every test.
 const SECRET: &str = "0123456789abcdef0123456789abcdef";
@@ -112,6 +112,11 @@ impl Stack {
         }
     }
 
+    /// The directory of the configuration file, without symlinks.
+    pub(crate) fn dir(&self) -> PathBuf {
+        fs::canonicalize(&self.dir).unwrap()
+    }
+
     /// Writes a file next to the configuration file.
     pub(crate) fn write(&self, name: &str, contents: &str) {
         fs::write(self.dir.join(name), contents).unwrap();
@@ -133,7 +138,7 @@ impl Stack {
 
     /// Prepares a server command with the test's configuration.
     pub(crate) fn command(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(SERVER);
+        let mut command = Command::new(SERVER_BIN);
         command
             .args(args)
             .env("GRANARY_CONFIG", self.dir.join("config.toml"))

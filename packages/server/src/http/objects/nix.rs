@@ -2,14 +2,18 @@
 
 use core::error::Error;
 use core::str;
+use std::io;
 
+use async_compression::tokio::bufread::XzEncoder;
 use axum::Json;
 use axum::body::{Body, to_bytes};
 use axum::extract::{Path, State};
 use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse as _, Response};
+use futures::TryStreamExt as _;
 use serde::{Deserialize, Serialize};
+use tokio_util::io::{ReaderStream, StreamReader};
 
 use super::Objects;
 use super::metrics::{Lookup, Upload};
@@ -112,7 +116,60 @@ pub(super) async fn get(
     {
         return nar(state, cache, hash, head).await;
     }
+    if let Some(compression) = key.strip_prefix("nar/").and_then(NarCompression::of_file) {
+        return nar_file(state, cache, key, compression, head).await;
+    }
     super::serve_file(state, cache.name().as_ref(), key, head).await
+}
+
+/// Serves a NAR file that `nix copy` uploaded, compressed as its name says.
+///
+/// Nix keeps the narinfos it uploads and may download from their URLs
+/// instead of the ones the cache serves.
+async fn nar_file(
+    state: &Objects,
+    cache: &Cache,
+    key: &str,
+    compression: NarCompression,
+    head: bool,
+) -> Response {
+    let Ok(object) = ObjectKey::try_from(key) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let client = match state.client().await {
+        Ok(client) => client,
+        Err(status) => return status.into_response(),
+    };
+    let hit = match cache.get(&client, &object).await {
+        Ok(Some(hit)) => hit,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(err) => {
+            tracing::error!(error = &err as &dyn Error, "failed to look up a NAR file");
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+    };
+    let content_type = HeaderValue::from_static("application/x-nix-nar");
+    if head {
+        return ([(CONTENT_TYPE, content_type)], ()).into_response();
+    }
+    let encoding = match compression {
+        NarCompression::Zstd => Encoding::Zstd,
+        NarCompression::None | NarCompression::Xz => Encoding::Plain,
+    };
+    let stream = match state.content.read(&client, hit.blob_id, encoding).await {
+        Ok(stream) => stream,
+        Err(err) => {
+            tracing::error!(error = &err as &dyn Error, "failed to read a NAR file");
+            return StatusCode::BAD_GATEWAY.into_response();
+        }
+    };
+    let body = if compression == NarCompression::Xz {
+        let plain = StreamReader::new(stream.map_err(io::Error::other));
+        Body::from_stream(ReaderStream::new(XzEncoder::new(plain)))
+    } else {
+        Body::from_stream(stream)
+    };
+    ([(CONTENT_TYPE, content_type)], body).into_response()
 }
 
 /// Serves the signed narinfo of a store path.

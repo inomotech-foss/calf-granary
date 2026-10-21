@@ -1,5 +1,7 @@
 //! Serving Nix binary caches.
 
+use std::path::Path;
+
 use aws_lc_rs::digest::{SHA256, digest};
 use aws_lc_rs::signature::{ED25519, UnparsedPublicKey};
 use base64::Engine as _;
@@ -7,8 +9,9 @@ use base64::engine::general_purpose::STANDARD;
 use reqwest::StatusCode;
 use reqwest::header::AUTHORIZATION;
 use serde_json::{Value, json};
+use tokio::process::Command;
 
-use crate::harness::{Server, Stack};
+use crate::harness::{SERVER_BIN, Server, Stack};
 
 const CACHES: &str = r#"
 [caches.nix-main]
@@ -176,31 +179,35 @@ async fn serves_uploaded_store_paths() {
         (
             None,
             &info,
+            Vec::new(),
             StatusCode::UNAUTHORIZED,
             "uploads need a token",
         ),
         (
             Some(token.as_str()),
             &wrong,
+            nar.clone(),
             StatusCode::BAD_REQUEST,
             "the hash must match",
         ),
         (
             Some(token.as_str()),
             &info,
+            nar.clone(),
             StatusCode::CREATED,
             "a new path is stored",
         ),
         (
             Some(token.as_str()),
             &info,
+            Vec::new(),
             StatusCode::NO_CONTENT,
             "an existing path is kept",
         ),
     ];
-    for (bearer, metadata, expected, reason) in cases {
+    for (bearer, metadata, body, expected, reason) in cases {
         assert_eq!(
-            upload(&server, bearer, metadata, nar.clone()).await,
+            upload(&server, bearer, metadata, body).await,
             expected,
             "{reason}"
         );
@@ -233,6 +240,21 @@ async fn serves_uploaded_store_paths() {
         "unknown paths are missing"
     );
     assert!(server.stop().await.success(), "serve stops cleanly");
+}
+
+async fn head_status(server: &Server, path: &str) -> StatusCode {
+    server
+        .http()
+        .head(server.url(path))
+        .send()
+        .await
+        .unwrap()
+        .status()
+}
+
+async fn get_bytes(server: &Server, path: &str) -> Vec<u8> {
+    let response = server.http().get(server.url(path)).send().await.unwrap();
+    response.bytes().await.unwrap().to_vec()
 }
 
 async fn put_basic(server: &Server, token: &str, path: &str, body: Vec<u8>) -> StatusCode {
@@ -277,13 +299,7 @@ async fn accepts_nix_copy_uploads() {
         "a narinfo needs its NAR file first"
     );
     assert_eq!(
-        server
-            .http()
-            .head(server.url(&format!("nix-main/{file_name}")))
-            .send()
-            .await
-            .unwrap()
-            .status(),
+        head_status(&server, &format!("nix-main/{file_name}")).await,
         StatusCode::NOT_FOUND,
         "nix copy sees that the NAR file is missing"
     );
@@ -299,13 +315,7 @@ async fn accepts_nix_copy_uploads() {
         "the NAR file is stored"
     );
     assert_eq!(
-        server
-            .http()
-            .head(server.url(&format!("nix-main/{file_name}")))
-            .send()
-            .await
-            .unwrap()
-            .status(),
+        head_status(&server, &format!("nix-main/{file_name}")).await,
         StatusCode::OK,
         "nix copy sees the NAR file"
     );
@@ -340,6 +350,161 @@ async fn accepts_nix_copy_uploads() {
         zstd::decode_all(response.bytes().await.unwrap().as_ref()).unwrap(),
         nar,
         "the NAR is served"
+    );
+    let uploaded = get_bytes(&server, &format!("nix-main/{file_name}")).await;
+    assert_eq!(
+        zstd::decode_all(uploaded.as_slice()).unwrap(),
+        nar,
+        "the uploaded file's URL still serves zstd, as nix copy remembers it"
+    );
+    assert!(server.stop().await.success(), "serve stops cleanly");
+}
+
+/// Runs Nix with its state below `dir` and the given store.
+async fn run_nix(dir: &Path, store: &str, args: &[&str]) -> String {
+    let output = Command::new(args.first().copied().unwrap_or("nix"))
+        .args(args.get(1..).unwrap_or_default())
+        .env("NIX_REMOTE", store)
+        .env(
+            "NIX_CONFIG",
+            "experimental-features = nix-command\nnarinfo-cache-negative-ttl = 0\n",
+        )
+        .env("HOME", dir)
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("XDG_CONFIG_HOME", dir.join("config"))
+        .env("XDG_DATA_HOME", dir.join("data"))
+        .env("XDG_STATE_HOME", dir.join("state"))
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+/// Pushes a store path from `store` with the client.
+async fn push_with_client(server: &Server, token: &str, dir: &Path, store: &str, path: &str) {
+    let output = Command::new(Path::new(SERVER_BIN).with_file_name("calf-granary-client"))
+        .args(["nix", "push", "--cache", "nix-main", path])
+        .env("GRANARY_SERVER", server.url(""))
+        .env("GRANARY_TOKEN", token)
+        .env("NIX_REMOTE", store)
+        .env("HOME", dir)
+        .env("NIX_CONFIG", "experimental-features = nix-command\n")
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "push failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres, object storage and Nix"]
+async fn round_trips_with_nix() {
+    let stack = Stack::new(CACHES).await;
+    stack.write("main.key", MAIN_KEY);
+    stack.write("pr.key", PR_KEY);
+    stack.migrate().await;
+    let server = stack.serve().await;
+    let token = stack.token(&["nix-main"]).await;
+    let dir = stack.dir();
+    let source = format!("local?root={}", dir.join("source").display());
+    let target = format!("local?root={}", dir.join("target").display());
+    let cache = server.url("nix-main");
+    stack.write(
+        "netrc",
+        &format!("machine 127.0.0.1\nlogin granary\npassword {token}\n"),
+    );
+    let netrc = dir.join("netrc").display().to_string();
+
+    let add = |name: &str| {
+        format!(r#"builtins.toFile "{name}" "uses ${{builtins.toFile "{name}-dep" "{name}"}}""#)
+    };
+    let copied = run_nix(
+        &dir,
+        &source,
+        &["nix", "eval", "--raw", "--expr", &add("copied")],
+    )
+    .await;
+    let pushed = run_nix(
+        &dir,
+        &source,
+        &["nix", "eval", "--raw", "--expr", &add("pushed")],
+    )
+    .await;
+    let xz = run_nix(
+        &dir,
+        &source,
+        &["nix", "eval", "--raw", "--expr", &add("xz")],
+    )
+    .await;
+
+    run_nix(
+        &dir,
+        &source,
+        &[
+            "nix",
+            "copy",
+            "--to",
+            &format!("{cache}?compression=zstd"),
+            "--netrc-file",
+            &netrc,
+            &copied,
+        ],
+    )
+    .await;
+    run_nix(
+        &dir,
+        &source,
+        &["nix", "copy", "--to", &cache, "--netrc-file", &netrc, &xz],
+    )
+    .await;
+    push_with_client(&server, &token, &dir, &source, &pushed).await;
+
+    let (_, public_key) = text(&server, "_api/nix/nix-main/public-key").await;
+    run_nix(
+        &dir,
+        &target,
+        &[
+            "nix",
+            "copy",
+            "--from",
+            &cache,
+            "--option",
+            "trusted-public-keys",
+            &public_key,
+            &copied,
+            &pushed,
+            &xz,
+        ],
+    )
+    .await;
+    run_nix(
+        &dir,
+        &target,
+        &[
+            "nix",
+            "store",
+            "verify",
+            "--recursive",
+            "--trusted-public-keys",
+            &public_key,
+            &copied,
+            &pushed,
+            &xz,
+        ],
+    )
+    .await;
+    let content = run_nix(&dir, &target, &["nix", "store", "cat", &pushed]).await;
+    assert!(
+        content.starts_with("uses /nix/store/"),
+        "the content arrives: {content}"
     );
     assert!(server.stop().await.success(), "serve stops cleanly");
 }

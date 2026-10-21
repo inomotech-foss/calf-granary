@@ -15,9 +15,11 @@
           cargoNextestExtraArgs = "--locked --workspace --run-ignored only";
           nativeBuildInputs = common.nativeBuildInputs ++ [
             pkgs.curl
+            pkgs.nix
             services.postgresql
           ];
           preCheck = ''
+            cargo build --locked ''${CARGO_PROFILE:+--profile $CARGO_PROFILE} --package calf-granary-client
             services=$(mktemp -d)
             initdb --pgdata "$services/postgres" --username postgres --auth trust --no-sync >/dev/null
             s3_port=$((20000 + RANDOM % 20000))
