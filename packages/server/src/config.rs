@@ -20,6 +20,9 @@ use crate::oidc::{Issuer, IssuerConfig};
 use crate::tiers::Tiers;
 use crate::token::TokenKey;
 
+/// How long issued tokens are valid unless configured.
+const DEFAULT_TOKEN_LIFETIME: Duration = Duration::from_hours(6);
+
 /// How long fetching an issuer's keys may take.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -38,6 +41,8 @@ pub(crate) struct Config {
     /// The tiers that map ID tokens to the caches they may write.
     #[serde(default)]
     tiers: Tiers,
+    /// How long issued tokens are valid, 6 hours by default.
+    token_lifetime: Option<ConfigDuration>,
 }
 
 impl Config {
@@ -107,7 +112,10 @@ impl Config {
             .into_values()
             .map(|issuer| Issuer::new(issuer, client.clone()))
             .collect();
-        Ok(Exchange::new(issuers, self.tiers, key))
+        let lifetime = self
+            .token_lifetime
+            .map_or(DEFAULT_TOKEN_LIFETIME, Into::into);
+        Ok(Exchange::new(issuers, self.tiers, key, lifetime))
     }
 }
 

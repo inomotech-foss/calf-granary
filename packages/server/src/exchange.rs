@@ -15,9 +15,6 @@ use crate::telemetry::SCOPE;
 use crate::tiers::Tiers;
 use crate::token::{Grant, TokenKey};
 
-/// How long issued tokens are valid.
-const TOKEN_LIFETIME: Duration = Duration::from_hours(6);
-
 /// The claim that selects the issuer, read before the token is verified.
 #[derive(Debug, Deserialize)]
 struct Unverified {
@@ -47,13 +44,20 @@ pub(crate) struct Exchange {
     tiers: Tiers,
     /// The key that signs granary tokens.
     key: TokenKey,
+    /// How long issued tokens are valid.
+    lifetime: Duration,
     /// Exchanges by outcome.
     exchanges: Counter<u64>,
 }
 
 impl Exchange {
     /// Creates the exchange.
-    pub(crate) fn new(issuers: Vec<Issuer>, tiers: Tiers, key: TokenKey) -> Self {
+    pub(crate) fn new(
+        issuers: Vec<Issuer>,
+        tiers: Tiers,
+        key: TokenKey,
+        lifetime: Duration,
+    ) -> Self {
         let exchanges = global::meter(SCOPE)
             .u64_counter("granary.token.exchanges")
             .with_description("ID token exchanges by outcome")
@@ -62,6 +66,7 @@ impl Exchange {
             issuers,
             tiers,
             key,
+            lifetime,
             exchanges,
         }
     }
@@ -104,7 +109,7 @@ impl Exchange {
             .tiers
             .select(&claims)
             .ok_or_else(|| ExchangeError::NoTier { sub: sub.clone() })?;
-        let grant = Grant::new(sub, tier.name.clone(), tier.caches.clone(), TOKEN_LIFETIME);
+        let grant = Grant::new(sub, tier.name.clone(), tier.caches.clone(), self.lifetime);
         let token = self.key.sign(&grant).map_err(ExchangeError::Sign)?;
         tracing::info!(
             issuer = iss,
@@ -160,6 +165,7 @@ impl ExchangeError {
 
 #[cfg(test)]
 mod tests {
+    use jsonwebtoken::get_current_timestamp;
     use reqwest::Client;
     use serde_json::json;
 
@@ -179,7 +185,12 @@ mod tests {
         ]))
         .unwrap();
         let key = "0123456789abcdef0123456789abcdef".parse().unwrap();
-        Exchange::new(vec![Issuer::new(issuer, Client::new())], tiers, key)
+        Exchange::new(
+            vec![Issuer::new(issuer, Client::new())],
+            tiers,
+            key,
+            Duration::from_mins(90),
+        )
     }
 
     #[tokio::test]
@@ -198,6 +209,11 @@ mod tests {
         assert!(
             !grant.allows("sstate-main"),
             "the token can't write sstate-main"
+        );
+        let remaining = grant.exp.saturating_sub(get_current_timestamp());
+        assert!(
+            (5390..=5400).contains(&remaining),
+            "the token lives for the configured 90 minutes"
         );
     }
 
