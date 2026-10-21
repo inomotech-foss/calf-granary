@@ -5,11 +5,14 @@ mod cache;
 mod claims;
 mod config;
 mod database;
+mod duration;
 mod exchange;
 mod http;
 mod migrations;
 mod oidc;
+mod prune;
 mod serve;
+mod tasks;
 #[cfg(test)]
 mod testing;
 mod tiers;
@@ -24,6 +27,7 @@ use tracing_subscriber::filter::LevelFilter;
 
 use crate::database::DatabaseArgs;
 use crate::migrations::MigrationError;
+use crate::prune::{PruneArgs, PruneCommandError};
 use crate::serve::{ServeArgs, ServeError};
 
 /// Build cache server for CI runners.
@@ -44,6 +48,8 @@ enum Command {
         #[command(flatten)]
         database: DatabaseArgs,
     },
+    /// Delete objects that weren't used within their cache's retention.
+    Prune(PruneArgs),
     /// Serve the caches over HTTP.
     Serve(ServeArgs),
 }
@@ -58,6 +64,7 @@ impl Command {
                 tracing::info!(count, "migrations applied");
                 Ok(())
             }
+            Self::Prune(args) => Ok(args.run().await?),
             Self::Serve(args) => Ok(args.run().await?),
         }
     }
@@ -72,6 +79,9 @@ enum CommandError {
     /// Applying migrations failed.
     #[error(transparent)]
     Migrate(#[from] MigrationError),
+    /// Pruning failed.
+    #[error(transparent)]
+    Prune(#[from] PruneCommandError),
     /// Serving failed.
     #[error(transparent)]
     Serve(#[from] ServeError),

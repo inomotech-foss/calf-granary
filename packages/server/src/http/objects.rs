@@ -204,12 +204,14 @@ mod tests {
         let main = Arc::new(Cache::new(
             "main-bucket".into(),
             ObjectPath::default(),
+            None,
             store(&[("a/main", "main")]).await,
             None,
         ));
         let pr = Arc::new(Cache::new(
             "pr-bucket".into(),
             ObjectPath::from("prefix"),
+            None,
             store(&[("a/pr", "pr")]).await,
             Some(Arc::clone(&main)),
         ));

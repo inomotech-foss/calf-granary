@@ -1,0 +1,144 @@
+//! Background tasks recorded in Postgres.
+
+use core::error::Error as _;
+use std::sync::Arc;
+use std::{env, process};
+
+use calf_granary_server_db::queries::prune::record_prune_run;
+use chrono::Utc;
+use deadpool_postgres::{Pool, PoolError};
+
+use crate::cache::{CacheName, Caches, PruneError, PruneStats};
+
+/// A kind of task.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TaskKind {
+    /// Delete objects that weren't used within their cache's retention.
+    Prune,
+}
+
+impl TaskKind {
+    /// The name stored in the database.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Prune => "prune",
+        }
+    }
+}
+
+/// Identifies the process that runs a task.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct WorkerId(String);
+
+impl WorkerId {
+    /// The ID of this process, from the host name and the process ID.
+    pub(crate) fn current() -> Self {
+        let host = env::var("HOSTNAME").unwrap_or_else(|_unset| "unknown".to_owned());
+        Self(format!("{host}:{}", process::id()))
+    }
+}
+
+impl AsRef<str> for WorkerId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Runs tasks.
+#[derive(Debug)]
+pub(crate) struct Runner {
+    /// Postgres connections.
+    pool: Pool,
+    /// The caches.
+    caches: Arc<Caches>,
+}
+
+impl Runner {
+    /// Creates a runner.
+    pub(crate) const fn new(pool: Pool, caches: Arc<Caches>) -> Self {
+        Self { pool, caches }
+    }
+
+    /// Runs a task.
+    pub(crate) async fn run(&self, id: i64, kind: TaskKind) -> Result<(), TaskError> {
+        match kind {
+            TaskKind::Prune => self.prune(id).await,
+        }
+    }
+
+    /// Prunes every cache and records what was deleted.
+    async fn prune(&self, id: i64) -> Result<(), TaskError> {
+        let client = self.pool.get().await?;
+        let now = Utc::now();
+        for (name, cache) in self.caches.iter() {
+            let stats = cache
+                .prune(&client, now)
+                .await
+                .map_err(|source| TaskError::Prune {
+                    cache: name.clone(),
+                    source,
+                })?;
+            let Some(PruneStats {
+                scanned,
+                deleted,
+                freed_bytes,
+            }) = stats
+            else {
+                continue;
+            };
+            let count = |value: u64| i64::try_from(value).unwrap_or(i64::MAX);
+            record_prune_run()
+                .bind(
+                    &client,
+                    &id,
+                    &name.as_ref(),
+                    &count(scanned),
+                    &count(deleted),
+                    &count(freed_bytes),
+                )
+                .await?;
+            tracing::info!(
+                cache = name.as_ref(),
+                scanned,
+                deleted,
+                freed_bytes,
+                "pruned a cache"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Errors from running a task.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum TaskError {
+    /// Recording the task's results failed.
+    #[error("failed to record the results")]
+    Database(#[from] tokio_postgres::Error),
+    /// No database connection was available.
+    #[error("failed to get a database connection")]
+    Pool(#[from] PoolError),
+    /// Pruning a cache failed.
+    #[error("failed to prune cache {cache}")]
+    Prune {
+        /// The cache.
+        cache: CacheName,
+        /// The error from pruning.
+        #[source]
+        source: PruneError,
+    },
+}
+
+impl TaskError {
+    /// Describes the error and its sources for the task record.
+    pub(crate) fn describe(&self) -> String {
+        let mut description = self.to_string();
+        let mut source = self.source();
+        while let Some(err) = source {
+            description.push_str(": ");
+            description.push_str(&err.to_string());
+            source = err.source();
+        }
+        description
+    }
+}

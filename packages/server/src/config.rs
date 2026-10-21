@@ -14,6 +14,7 @@ use serde::Deserialize;
 use toml::de::Error as TomlError;
 
 use crate::cache::{Cache, CacheName, Caches};
+use crate::duration::ConfigDuration;
 use crate::exchange::Exchange;
 use crate::oidc::{Issuer, IssuerConfig};
 use crate::tiers::Tiers;
@@ -118,6 +119,8 @@ struct CacheConfig {
     bucket: String,
     /// A key prefix within the bucket.
     prefix: Option<String>,
+    /// How long objects are kept after they were last read or written.
+    retention: Option<ConfigDuration>,
     /// The cache to read from when an object is missing.
     fallback: Option<CacheName>,
 }
@@ -145,6 +148,7 @@ impl CacheConfig {
         Ok(Cache::new(
             self.bucket.as_str().into(),
             prefix,
+            self.retention.map(Into::into),
             store,
             fallback,
         ))

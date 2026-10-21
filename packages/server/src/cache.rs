@@ -1,10 +1,12 @@
 //! Caches and the objects in them.
 
+mod prune;
 mod upload;
 
 use core::borrow::Borrow;
 use core::error::Error;
 use core::fmt;
+use core::time::Duration;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -16,6 +18,7 @@ use object_store::{
 };
 use serde::{Deserialize, Serialize};
 
+pub(crate) use self::prune::{PruneError, PruneStats};
 use self::upload::Upload;
 
 /// The size of the parts of multipart uploads. Smaller objects are uploaded
@@ -133,6 +136,9 @@ pub(crate) struct Cache {
     bucket: Arc<str>,
     /// The key prefix of the objects in the bucket.
     prefix: Path,
+    /// How long objects are kept after they were last read or written.
+    /// Objects are kept forever without it.
+    retention: Option<Duration>,
     /// The bucket, limited to the prefix.
     store: Arc<dyn ObjectStore>,
     /// The cache to read from when an object is missing here.
@@ -146,12 +152,14 @@ impl Cache {
     pub(crate) const fn new(
         bucket: Arc<str>,
         prefix: Path,
+        retention: Option<Duration>,
         store: Arc<dyn ObjectStore>,
         fallback: Option<Arc<Self>>,
     ) -> Self {
         Self {
             bucket,
             prefix,
+            retention,
             store,
             fallback,
         }
@@ -253,8 +261,13 @@ impl Cache {
     fn object(&self, key: &ObjectKey) -> StoredObject {
         StoredObject {
             bucket: Arc::clone(&self.bucket),
-            key: self.prefix.parts().chain(key.0.parts()).collect(),
+            key: self.full_key(&key.0),
         }
+    }
+
+    /// Prepends the prefix to a location in the store.
+    fn full_key(&self, location: &Path) -> Path {
+        self.prefix.parts().chain(location.parts()).collect()
     }
 }
 
@@ -282,6 +295,11 @@ impl Caches {
     /// Looks up a cache by name.
     pub(crate) fn get(&self, name: &str) -> Option<&Cache> {
         self.0.get(name).map(AsRef::as_ref)
+    }
+
+    /// Returns every cache with its name.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&CacheName, &Cache)> {
+        self.0.iter().map(|(name, cache)| (name, cache.as_ref()))
     }
 }
 
