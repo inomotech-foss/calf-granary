@@ -49,3 +49,34 @@ async fn migrate_is_idempotent() {
         text(&output)
     );
 }
+
+#[tokio::test]
+#[ignore = "needs Postgres and object storage"]
+async fn domains_reject_invalid_values() {
+    let stack = Stack::new(EMPTY).await;
+    stack.migrate().await;
+    let database = stack.database().await;
+    let cases = [
+        ("'abc'::sha256_digest", "a digest of the wrong length"),
+        ("(-1)::byte_count", "a negative size"),
+        ("'Main'::cache_name", "an uppercase cache name"),
+        ("'a//b'::entry_key", "an empty key segment"),
+        ("'../b'::entry_key", "a parent key segment"),
+        ("'chunks/xyz'::chunk_key", "a malformed chunk key"),
+        (
+            "'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'::nix_hash_part",
+            "a letter outside Nix base32",
+        ),
+    ];
+    for (value, reason) in cases {
+        let result = database.execute(&format!("SELECT {value}"), &[]).await;
+        assert!(result.is_err(), "{reason} is rejected");
+    }
+    let valid = database
+        .execute(
+            "SELECT 'a/b.tar'::entry_key, '0123456789abcdfghijklmnpqrsvwxyz'::nix_hash_part",
+            &[],
+        )
+        .await;
+    assert!(valid.is_ok(), "valid values pass: {valid:?}");
+}

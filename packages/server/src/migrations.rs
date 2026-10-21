@@ -8,23 +8,28 @@ use tokio_postgres::{Client, GenericClient, Transaction};
 const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
-        name: "tasks",
-        sql: include_str!("../migrations/0001_tasks.sql"),
+        name: "types",
+        sql: include_str!("../migrations/0001_types.sql"),
     },
     Migration {
         version: 2,
-        name: "content",
-        sql: include_str!("../migrations/0002_content.sql"),
+        name: "tasks",
+        sql: include_str!("../migrations/0002_tasks.sql"),
     },
     Migration {
         version: 3,
-        name: "nix",
-        sql: include_str!("../migrations/0003_nix.sql"),
+        name: "content",
+        sql: include_str!("../migrations/0003_content.sql"),
     },
     Migration {
         version: 4,
+        name: "nix",
+        sql: include_str!("../migrations/0004_nix.sql"),
+    },
+    Migration {
+        version: 5,
         name: "hashserv",
-        sql: include_str!("../migrations/0004_hashserv.sql"),
+        sql: include_str!("../migrations/0005_hashserv.sql"),
     },
 ];
 

@@ -1,6 +1,6 @@
 CREATE TABLE hashserv_unihash (
-    cache text NOT NULL,
-    method text NOT NULL,
+    cache cache_name NOT NULL,
+    method hashserv_method NOT NULL,
     taskhash text NOT NULL,
     unihash text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -13,8 +13,8 @@ CREATE INDEX hashserv_unihash_value ON hashserv_unihash (unihash);
 CREATE INDEX hashserv_unihash_access ON hashserv_unihash (cache, last_access);
 
 CREATE TABLE hashserv_outhash (
-    cache text NOT NULL,
-    method text NOT NULL,
+    cache cache_name NOT NULL,
+    method hashserv_method NOT NULL,
     taskhash text NOT NULL,
     outhash text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),

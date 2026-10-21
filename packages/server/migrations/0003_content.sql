@@ -1,11 +1,11 @@
 CREATE TABLE chunk (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    hash bytea NOT NULL CHECK (length(hash) = 32),
-    size bigint NOT NULL CHECK (size >= 0),
+    hash sha256_digest NOT NULL,
+    size byte_count NOT NULL,
     compression text NOT NULL CHECK (compression IN ('none', 'zstd')),
-    stored_size bigint NOT NULL CHECK (stored_size >= 0),
-    store text NOT NULL,
-    object_key text NOT NULL,
+    stored_size byte_count NOT NULL,
+    store store_name NOT NULL,
+    object_key chunk_key NOT NULL,
     state text NOT NULL DEFAULT 'valid' CHECK (state IN ('valid', 'deleting')),
     touched_at timestamptz NOT NULL DEFAULT now(),
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -16,8 +16,8 @@ CREATE UNIQUE INDEX chunk_valid_hash ON chunk (hash) WHERE state = 'valid';
 
 CREATE TABLE blob (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    hash bytea NOT NULL UNIQUE CHECK (length(hash) = 32),
-    size bigint NOT NULL CHECK (size >= 0),
+    hash sha256_digest NOT NULL UNIQUE,
+    size byte_count NOT NULL,
     touched_at timestamptz NOT NULL DEFAULT now(),
     created_at timestamptz NOT NULL DEFAULT now()
 );
@@ -32,8 +32,8 @@ CREATE TABLE blob_chunk (
 CREATE INDEX blob_chunk_chunk ON blob_chunk (chunk_id);
 
 CREATE TABLE entry (
-    cache text NOT NULL,
-    key text NOT NULL,
+    cache cache_name NOT NULL,
+    key entry_key NOT NULL,
     blob_id bigint NOT NULL REFERENCES blob,
     created_at timestamptz NOT NULL DEFAULT now(),
     last_access timestamptz NOT NULL DEFAULT now(),
