@@ -10,7 +10,7 @@ use std::time::Instant;
 use std::{env, process};
 
 use calf_granary_server_db::queries::content::{StoreSizes, store_sizes};
-use calf_granary_server_db::queries::prune::{
+use calf_granary_server_db::queries::task_result::{
     record_prune_collection, record_prune_expiry, record_tier_run,
 };
 use chrono::Utc;

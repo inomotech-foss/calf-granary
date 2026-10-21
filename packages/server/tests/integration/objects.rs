@@ -165,7 +165,7 @@ async fn records_reads_on_shutdown() {
         .database()
         .await
         .query(
-            "SELECT cache, key FROM entry WHERE last_access > created_at",
+            "SELECT cache, key FROM entry WHERE accessed_at > created_at",
             &[],
         )
         .await

@@ -4,13 +4,13 @@ CREATE TABLE hashserv_unihash (
     taskhash sha256_digest NOT NULL,
     unihash sha256_digest NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
-    last_access timestamptz NOT NULL DEFAULT now(),
+    accessed_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (cache, method, taskhash)
 );
 
 CREATE INDEX hashserv_unihash_value ON hashserv_unihash (unihash, cache);
 
-CREATE INDEX hashserv_unihash_access ON hashserv_unihash (cache, last_access);
+CREATE INDEX hashserv_unihash_accessed ON hashserv_unihash (cache, accessed_at);
 
 CREATE TABLE hashserv_outhash (
     cache cache_name NOT NULL,

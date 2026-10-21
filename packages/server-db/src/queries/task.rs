@@ -397,9 +397,9 @@ impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql, T2: crate::StringSql, T
 pub struct EnqueueDueSchedulesStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn enqueue_due_schedules() -> EnqueueDueSchedulesStmt {
     EnqueueDueSchedulesStmt(
-        "WITH due AS ( UPDATE schedule SET next_due = now() + make_interval(secs => \
-         every_seconds) WHERE next_due <= now() RETURNING kind ) INSERT INTO task (kind, \
-         requested_by) SELECT kind, 'schedule' FROM due RETURNING id, kind",
+        "WITH due AS ( UPDATE schedule SET due_at = now() + period WHERE due_at <= now() \
+         RETURNING kind ) INSERT INTO task (kind, requested_by) SELECT kind, 'schedule' FROM due \
+         RETURNING id, kind",
         None,
     )
 }
@@ -698,9 +698,9 @@ impl<'a, C: GenericClient + Send + Sync, T1: crate::StringSql>
 pub struct NextDeadlineStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn next_deadline() -> NextDeadlineStmt {
     NextDeadlineStmt(
-        "SELECT extract(epoch FROM least( (SELECT min(next_due) FROM schedule), (SELECT \
-         min(due_at) FROM task WHERE state = 'pending'), (SELECT min(lease_expires_at) FROM task \
-         WHERE state = 'running') ) - now())::float8 AS seconds",
+        "SELECT extract(epoch FROM least( (SELECT min(due_at) FROM schedule), (SELECT min(due_at) \
+         FROM task WHERE state = 'pending'), (SELECT min(lease_expires_at) FROM task WHERE state \
+         = 'running') ) - now())::float8 AS seconds",
         None,
     )
 }

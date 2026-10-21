@@ -6,8 +6,8 @@ RETURNING id;
 --! enqueue_due_schedules
 WITH due AS (
     UPDATE schedule
-    SET next_due = now() + make_interval(secs => every_seconds)
-    WHERE next_due <= now()
+    SET due_at = now() + period
+    WHERE due_at <= now()
     RETURNING kind
 )
 INSERT INTO task (kind, requested_by)
@@ -56,7 +56,7 @@ WHERE id = :id::bigint AND worker = :worker::text AND state = 'running';
 
 --! next_deadline : (seconds?)
 SELECT extract(epoch FROM least(
-    (SELECT min(next_due) FROM schedule),
+    (SELECT min(due_at) FROM schedule),
     (SELECT min(due_at) FROM task WHERE state = 'pending'),
     (SELECT min(lease_expires_at) FROM task WHERE state = 'running')
 ) - now())::float8 AS seconds;

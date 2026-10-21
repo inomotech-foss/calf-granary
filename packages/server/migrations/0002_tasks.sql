@@ -34,11 +34,11 @@ EXECUTE FUNCTION notify_task();
 
 CREATE TABLE schedule (
     kind text PRIMARY KEY REFERENCES task_kind,
-    every_seconds bigint NOT NULL CHECK (every_seconds > 0),
-    next_due timestamptz NOT NULL DEFAULT now()
+    period interval NOT NULL CHECK (period > interval '0'),
+    due_at timestamptz NOT NULL DEFAULT now()
 );
 
-INSERT INTO schedule (kind, every_seconds) VALUES ('prune', 86400), ('tier', 86400);
+INSERT INTO schedule (kind, period) VALUES ('prune', interval '24 hours'), ('tier', interval '24 hours');
 
 CREATE TABLE prune_expiry (
     task_id bigint NOT NULL REFERENCES task ON DELETE CASCADE,

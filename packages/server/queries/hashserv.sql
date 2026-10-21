@@ -9,12 +9,12 @@ JOIN hashserv_unihash
 
 --! touch_unihashes
 UPDATE hashserv_unihash
-SET last_access = now()
+SET accessed_at = now()
 FROM unnest(:methods::text[], :taskhashes::bytea[]) AS requested (method, taskhash)
 WHERE hashserv_unihash.cache = :cache::text
     AND hashserv_unihash.method = requested.method
     AND hashserv_unihash.taskhash = requested.taskhash
-    AND hashserv_unihash.last_access < now() - interval '1 hour';
+    AND hashserv_unihash.accessed_at < now() - interval '1 hour';
 
 --! existing_unihashes
 SELECT requested.position
@@ -106,4 +106,4 @@ WHERE cache = :cache::text AND method = :method::text AND taskhash = :taskhash::
 
 --! expire_unihashes
 DELETE FROM hashserv_unihash
-WHERE cache = :cache::text AND last_access < :cutoff::timestamptz;
+WHERE cache = :cache::text AND accessed_at < :cutoff::timestamptz;

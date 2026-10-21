@@ -48,10 +48,10 @@ CREATE TABLE entry (
     key entry_key NOT NULL,
     blob_id bigint NOT NULL REFERENCES blob,
     created_at timestamptz NOT NULL DEFAULT now(),
-    last_access timestamptz NOT NULL DEFAULT now(),
+    accessed_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (cache, key)
 );
 
 CREATE INDEX entry_blob ON entry (blob_id);
 
-CREATE INDEX entry_last_access ON entry (cache, last_access);
+CREATE INDEX entry_accessed ON entry (cache, accessed_at);

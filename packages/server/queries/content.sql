@@ -56,13 +56,13 @@ ORDER BY blob_chunk.seq;
 
 --! record_entry_accesses
 UPDATE entry
-SET last_access = greatest(last_access, now())
+SET accessed_at = greatest(accessed_at, now())
 FROM unnest(:keys::text[]) AS accessed (key)
 WHERE entry.cache = :cache::text AND entry.key = accessed.key;
 
 --! expire_entries
 DELETE FROM entry
-WHERE cache = :cache::text AND last_access < :cutoff::timestamptz;
+WHERE cache = :cache::text AND accessed_at < :cutoff::timestamptz;
 
 --! delete_orphan_blobs
 DELETE FROM blob

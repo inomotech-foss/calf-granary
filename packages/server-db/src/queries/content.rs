@@ -1468,7 +1468,7 @@ impl BlobChunksStmt {
 pub struct RecordEntryAccessesStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn record_entry_accesses() -> RecordEntryAccessesStmt {
     RecordEntryAccessesStmt(
-        "UPDATE entry SET last_access = greatest(last_access, now()) FROM unnest($1::text[]) AS \
+        "UPDATE entry SET accessed_at = greatest(accessed_at, now()) FROM unnest($1::text[]) AS \
          accessed (key) WHERE entry.cache = $2::text AND entry.key = accessed.key",
         None,
     )
@@ -1529,7 +1529,7 @@ impl<
 pub struct ExpireEntriesStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn expire_entries() -> ExpireEntriesStmt {
     ExpireEntriesStmt(
-        "DELETE FROM entry WHERE cache = $1::text AND last_access < $2::timestamptz",
+        "DELETE FROM entry WHERE cache = $1::text AND accessed_at < $2::timestamptz",
         None,
     )
 }

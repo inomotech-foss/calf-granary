@@ -523,10 +523,10 @@ impl<
 pub struct TouchUnihashesStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn touch_unihashes() -> TouchUnihashesStmt {
     TouchUnihashesStmt(
-        "UPDATE hashserv_unihash SET last_access = now() FROM unnest($1::text[], $2::bytea[]) AS \
+        "UPDATE hashserv_unihash SET accessed_at = now() FROM unnest($1::text[], $2::bytea[]) AS \
          requested (method, taskhash) WHERE hashserv_unihash.cache = $3::text AND \
          hashserv_unihash.method = requested.method AND hashserv_unihash.taskhash = \
-         requested.taskhash AND hashserv_unihash.last_access < now() - interval '1 hour'",
+         requested.taskhash AND hashserv_unihash.accessed_at < now() - interval '1 hour'",
         None,
     )
 }
@@ -1141,7 +1141,7 @@ impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql, T2: crate::StringSql, T
 pub struct ExpireUnihashesStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn expire_unihashes() -> ExpireUnihashesStmt {
     ExpireUnihashesStmt(
-        "DELETE FROM hashserv_unihash WHERE cache = $1::text AND last_access < $2::timestamptz",
+        "DELETE FROM hashserv_unihash WHERE cache = $1::text AND accessed_at < $2::timestamptz",
         None,
     )
 }
