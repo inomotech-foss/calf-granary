@@ -20,7 +20,8 @@ in
     { config, pkgs, ... }:
     let
       server = lib.getExe' config.packages.calf-granary-server "calf-granary-server";
-      postgresql = pkgs.postgresql_18;
+      services = import ./services.nix { inherit lib pkgs; };
+      inherit (services) curl postgresql;
       granaryConfig = (pkgs.formats.toml { }).generate "granary-dev.toml" { inherit caches; };
 
       postgres = pkgs.writeShellScript "granary-dev-postgres" ''
@@ -32,41 +33,11 @@ in
           -c listen_addresses=127.0.0.1 -c port=15432
       '';
 
-      s3Config = (pkgs.formats.json { }).generate "granary-dev-s3.json" {
-        identities = [
-          {
-            name = "dev";
-            credentials = [
-              {
-                accessKey = "dev";
-                secretKey = "dev";
-              }
-            ];
-            actions = [ "Admin" ];
-          }
-        ];
-      };
-
       seaweedfs = pkgs.writeShellScript "granary-dev-seaweedfs" ''
         mkdir -p "$GRANARY_DEV_DIR/seaweedfs"
         cd "$GRANARY_DEV_DIR/seaweedfs"
-        exec ${lib.getExe' pkgs.seaweedfs "weed"} server -dir=. -ip=127.0.0.1 -ip.bind=127.0.0.1 \
-          -master.port=19333 -volume.port=19080 -volume.max=100 \
-          -filer -filer.port=19888 -s3 -s3.port=18333 -s3.config=${s3Config}
+        exec ${services.seaweedfs { port = 18333; }}
       '';
-
-      createBuckets = pkgs.writeShellScript "granary-dev-buckets" ''
-        s3() {
-          ${curl} --aws-sigv4 "aws:amz:$AWS_REGION:s3" \
-            --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" "$@"
-        }
-        for bucket in ${lib.escapeShellArgs buckets}; do
-          s3 --head "$AWS_ENDPOINT/$bucket" >/dev/null 2>&1 \
-            || s3 --request PUT "$AWS_ENDPOINT/$bucket"
-        done
-      '';
-
-      curl = "${lib.getExe pkgs.curl} --fail --silent --show-error";
 
       readiness = probe: {
         readiness_probe = probe // {
@@ -101,7 +72,7 @@ in
           }
           // readiness { exec.command = "${curl} http://127.0.0.1:18333/healthz"; };
           buckets = {
-            command = createBuckets;
+            command = services.createBuckets buckets;
           }
           // after { seaweedfs = "process_healthy"; };
           migrate = {
@@ -143,10 +114,7 @@ in
           export GRANARY_LISTEN=127.0.0.1:18080
           export GRANARY_TOKEN_SECRET=$(cat "$secret")
           export AWS_ENDPOINT=http://127.0.0.1:18333
-          export AWS_ALLOW_HTTP=true
-          export AWS_REGION=us-east-1
-          export AWS_ACCESS_KEY_ID=dev
-          export AWS_SECRET_ACCESS_KEY=dev
+          ${services.s3Exports}
           EOF
           # shellcheck source=/dev/null
           source "$GRANARY_DEV_DIR/env"
