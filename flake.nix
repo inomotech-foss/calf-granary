@@ -17,6 +17,7 @@
         ./ephemeris.nix
         ./nix/cornucopia.nix
         ./nix/dev.nix
+        ./nix/integration.nix
         ./nix/rust-packages.nix
       ];
 

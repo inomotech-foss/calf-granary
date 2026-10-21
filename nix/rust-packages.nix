@@ -65,6 +65,7 @@ in
       ) cfg.packages;
     in
     {
+      _module.args.granaryCrane = { inherit craneLib common cargoArtifacts; };
       inherit packages;
       checks = lib.mapAttrs' (name: package: lib.nameValuePair "package-${name}" package) packages;
     };
