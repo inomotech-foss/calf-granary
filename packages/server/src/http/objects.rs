@@ -14,10 +14,10 @@ use axum::response::{IntoResponse as _, Response};
 use axum::routing::get;
 use object_store::{GetResult, ObjectMeta};
 
-use self::metrics::{Lookup, ObjectMetrics};
+use self::metrics::{Lookup, ObjectMetrics, Upload};
 use super::bearer;
 use crate::access::AccessLog;
-use crate::cache::{Caches, ObjectKey, PutError};
+use crate::cache::{Caches, ObjectKey, PutError, Stored};
 use crate::token::TokenKey;
 
 /// Shared state of the object routes.
@@ -141,16 +141,23 @@ async fn put_object(
         return StatusCode::BAD_REQUEST;
     };
     match found.put(&object, body.into_data_stream()).await {
-        Ok(true) => {
-            tracing::debug!(sub = grant.sub, cache, key, "stored an object");
+        Ok(Stored::New { size }) => {
+            tracing::debug!(sub = grant.sub, cache, key, size, "stored an object");
+            state.metrics.upload(&cache, Upload::Stored);
+            state.metrics.stored(&cache, size);
             StatusCode::CREATED
         }
-        Ok(false) => StatusCode::NO_CONTENT,
+        Ok(Stored::Existing) => {
+            state.metrics.upload(&cache, Upload::Existing);
+            StatusCode::NO_CONTENT
+        }
         Err(err @ PutError::Body(_)) => {
+            state.metrics.upload(&cache, Upload::Aborted);
             tracing::info!(error = &err as &dyn Error, cache, key, "upload aborted");
             StatusCode::BAD_REQUEST
         }
         Err(err @ PutError::Store(_)) => {
+            state.metrics.upload(&cache, Upload::Error);
             tracing::error!(
                 error = &err as &dyn Error,
                 cache,

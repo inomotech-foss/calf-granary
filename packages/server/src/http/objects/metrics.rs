@@ -30,6 +30,31 @@ impl Lookup {
     }
 }
 
+/// The outcome of an upload.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Upload {
+    /// The object was stored.
+    Stored,
+    /// The cache already had the object.
+    Existing,
+    /// The client stopped sending the body.
+    Aborted,
+    /// Object storage failed.
+    Error,
+}
+
+impl Upload {
+    /// The value of the `result` attribute.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Stored => "stored",
+            Self::Existing => "existing",
+            Self::Aborted => "aborted",
+            Self::Error => "error",
+        }
+    }
+}
+
 /// The instruments that object reads and writes are recorded with.
 #[derive(Clone, Debug)]
 pub(super) struct ObjectMetrics {
@@ -37,6 +62,10 @@ pub(super) struct ObjectMetrics {
     lookups: Counter<u64>,
     /// Bytes of object content sent to clients, by cache.
     served: Counter<u64>,
+    /// Uploads by cache and outcome.
+    uploads: Counter<u64>,
+    /// Bytes of stored objects, by cache.
+    stored: Counter<u64>,
 }
 
 impl ObjectMetrics {
@@ -53,6 +82,15 @@ impl ObjectMetrics {
                 .with_unit("By")
                 .with_description("Object content sent to clients")
                 .build(),
+            uploads: meter
+                .u64_counter("granary.cache.uploads")
+                .with_description("Object uploads by outcome")
+                .build(),
+            stored: meter
+                .u64_counter("granary.cache.stored")
+                .with_unit("By")
+                .with_description("Content of newly stored objects")
+                .build(),
         }
     }
 
@@ -65,6 +103,23 @@ impl ObjectMetrics {
                 KeyValue::new("result", lookup.as_str()),
             ],
         );
+    }
+
+    /// Records the outcome of an upload.
+    pub(super) fn upload(&self, cache: &str, upload: Upload) {
+        self.uploads.add(
+            1,
+            &[
+                KeyValue::new("cache", cache.to_owned()),
+                KeyValue::new("result", upload.as_str()),
+            ],
+        );
+    }
+
+    /// Records the content of a newly stored object.
+    pub(super) fn stored(&self, cache: &str, size: u64) {
+        self.stored
+            .add(size, &[KeyValue::new("cache", cache.to_owned())]);
     }
 
     /// Records object content that is sent to a client.

@@ -131,6 +131,18 @@ pub(crate) struct Hit {
     pub(crate) result: GetResult,
 }
 
+/// What storing an object did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Stored {
+    /// The object was stored.
+    New {
+        /// The object's size in bytes.
+        size: u64,
+    },
+    /// The cache already had the object.
+    Existing,
+}
+
 /// A cache backed by object storage.
 #[derive(Debug)]
 pub(crate) struct Cache {
@@ -208,10 +220,9 @@ impl Cache {
 
     /// Stores an object unless this cache already has it.
     ///
-    /// Returns whether the object was stored. Objects that fit in one part
-    /// are uploaded in one request, larger ones in parts. An unfinished
-    /// multipart upload is aborted.
-    pub(crate) async fn put<S, E>(&self, key: &ObjectKey, mut body: S) -> Result<bool, PutError>
+    /// Objects that fit in one part are uploaded in one request, larger ones
+    /// in parts. An unfinished multipart upload is aborted.
+    pub(crate) async fn put<S, E>(&self, key: &ObjectKey, mut body: S) -> Result<Stored, PutError>
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin + Send,
         E: Error + Send + Sync + 'static,
@@ -222,7 +233,7 @@ impl Cache {
             .map_err(PutError::Store)?
             .is_some()
         {
-            return Ok(false);
+            return Ok(Stored::Existing);
         }
         let mut parts = Vec::new();
         let mut size = 0usize;
@@ -233,7 +244,9 @@ impl Cache {
                     .put_opts(&key.0, payload, PutOptions::default())
                     .await
                     .map_err(PutError::Store)?;
-                return Ok(true);
+                return Ok(Stored::New {
+                    size: u64::try_from(size).unwrap_or(u64::MAX),
+                });
             };
             let chunk = chunk.map_err(|source| PutError::Body(Box::new(source)))?;
             size = size.saturating_add(chunk.len());
@@ -254,13 +267,16 @@ impl Cache {
         }
         while let Some(chunk) = body.next().await {
             let chunk = chunk.map_err(|source| PutError::Body(Box::new(source)))?;
+            size = size.saturating_add(chunk.len());
             upload
                 .put(chunk, PART_CONCURRENCY)
                 .await
                 .map_err(PutError::Store)?;
         }
         upload.finish().await.map_err(PutError::Store)?;
-        Ok(true)
+        Ok(Stored::New {
+            size: u64::try_from(size).unwrap_or(u64::MAX),
+        })
     }
 
     /// Identifies an object of this cache in its bucket.
