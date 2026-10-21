@@ -12,4 +12,6 @@ WHERE bucket = :bucket::text AND key = any(:keys::text[]);
 
 --! forget_accesses_before
 DELETE FROM access
-WHERE bucket = :bucket::text AND last_access < :cutoff::timestamptz;
+WHERE bucket = :bucket::text
+    AND starts_with(key, :prefix::text)
+    AND last_access < :cutoff::timestamptz;

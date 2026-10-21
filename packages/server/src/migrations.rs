@@ -5,11 +5,18 @@ use std::collections::BTreeMap;
 use tokio_postgres::{Client, GenericClient, Transaction};
 
 /// Every migration, in the order it is applied.
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "access",
-    sql: include_str!("../migrations/0001_access.sql"),
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "access",
+        sql: include_str!("../migrations/0001_access.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "tasks",
+        sql: include_str!("../migrations/0002_tasks.sql"),
+    },
+];
 
 /// The advisory lock that serializes concurrent migration runs.
 const LOCK: i64 = 0x0067_7261_6E61_7279;

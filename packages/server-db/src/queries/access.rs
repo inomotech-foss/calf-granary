@@ -19,8 +19,9 @@ pub struct LastAccessesParams<
     pub keys: T3,
 }
 #[derive(Debug)]
-pub struct ForgetAccessesBeforeParams<T1: crate::StringSql> {
+pub struct ForgetAccessesBeforeParams<T1: crate::StringSql, T2: crate::StringSql> {
     pub bucket: T1,
+    pub prefix: T2,
     pub cutoff: chrono::DateTime<chrono::FixedOffset>,
 }
 #[derive(Debug, Clone, PartialEq)]
@@ -246,7 +247,8 @@ impl<
 pub struct ForgetAccessesBeforeStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn forget_accesses_before() -> ForgetAccessesBeforeStmt {
     ForgetAccessesBeforeStmt(
-        "DELETE FROM access WHERE bucket = $1::text AND last_access < $2::timestamptz",
+        "DELETE FROM access WHERE bucket = $1::text AND starts_with(key, $2::text) AND \
+         last_access < $3::timestamptz",
         None,
     )
 }
@@ -258,21 +260,22 @@ impl ForgetAccessesBeforeStmt {
         self.1 = Some(client.prepare(self.0).await?);
         Ok(self)
     }
-    pub async fn bind<'c, 'a, 's, C: GenericClient, T1: crate::StringSql>(
+    pub async fn bind<'c, 'a, 's, C: GenericClient, T1: crate::StringSql, T2: crate::StringSql>(
         &'s self,
         client: &'c C,
         bucket: &'a T1,
+        prefix: &'a T2,
         cutoff: &'a chrono::DateTime<chrono::FixedOffset>,
     ) -> Result<u64, tokio_postgres::Error> {
-        client.execute(self.0, &[bucket, cutoff]).await
+        client.execute(self.0, &[bucket, prefix, cutoff]).await
     }
 }
-impl<'a, C: GenericClient + Send + Sync, T1: crate::StringSql>
+impl<'a, C: GenericClient + Send + Sync, T1: crate::StringSql, T2: crate::StringSql>
     crate::client::async_::Params<
         'a,
         'a,
         'a,
-        ForgetAccessesBeforeParams<T1>,
+        ForgetAccessesBeforeParams<T1, T2>,
         std::pin::Pin<
             Box<dyn futures::Future<Output = Result<u64, tokio_postgres::Error>> + Send + 'a>,
         >,
@@ -282,10 +285,10 @@ impl<'a, C: GenericClient + Send + Sync, T1: crate::StringSql>
     fn params(
         &'a self,
         client: &'a C,
-        params: &'a ForgetAccessesBeforeParams<T1>,
+        params: &'a ForgetAccessesBeforeParams<T1, T2>,
     ) -> std::pin::Pin<
         Box<dyn futures::Future<Output = Result<u64, tokio_postgres::Error>> + Send + 'a>,
     > {
-        Box::pin(self.bind(client, &params.bucket, &params.cutoff))
+        Box::pin(self.bind(client, &params.bucket, &params.prefix, &params.cutoff))
     }
 }
