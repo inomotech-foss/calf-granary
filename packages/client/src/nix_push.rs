@@ -1,5 +1,7 @@
 //! The `nix push` command.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use clap::Args;
 use futures::{StreamExt as _, TryStreamExt as _, stream};
 use reqwest::{Body, Client, StatusCode};
@@ -40,7 +42,7 @@ struct UploadInfo<'a> {
     references: &'a [String],
     /// The full store path of the derivation that built the path.
     deriver: Option<&'a str>,
-    /// The system that built the path, which Nix doesn't report.
+    /// The system that built the path, if its derivation is in the store.
     system: Option<&'a str>,
     /// The content address of a content-addressed path.
     ca: Option<&'a str>,
@@ -54,6 +56,13 @@ impl PushArgs {
     /// Uploads the closure of the paths, except what the cache has.
     pub(crate) async fn run(self) -> Result<(), PushError> {
         let closure = nix::closure(&self.paths).await?;
+        let derivations: Vec<String> = closure
+            .values()
+            .filter_map(|info| info.deriver.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let systems = nix::systems(&derivations).await?;
         let hashes: Vec<&str> = closure
             .keys()
             .filter_map(|path| nix::hash_part(path))
@@ -82,7 +91,7 @@ impl PushArgs {
             .filter(|(path, _)| {
                 nix::hash_part(path).is_some_and(|hash| missing.missing.iter().any(|m| m == hash))
             })
-            .map(|(path, info)| self.upload(&http, path, info));
+            .map(|(path, info)| self.upload(&http, path, info, &systems));
         stream::iter(uploads)
             .buffer_unordered(self.target.jobs())
             .try_collect::<Vec<()>>()
@@ -91,12 +100,24 @@ impl PushArgs {
     }
 
     /// Uploads the NAR of one store path.
-    async fn upload(&self, http: &Client, path: &str, info: &PathInfo) -> Result<(), PushError> {
+    async fn upload(
+        &self,
+        http: &Client,
+        path: &str,
+        info: &PathInfo,
+        systems: &BTreeMap<String, String>,
+    ) -> Result<(), PushError> {
+        let system = info
+            .deriver
+            .as_deref()
+            .and_then(|deriver| deriver.rsplit('/').next())
+            .and_then(|base_name| systems.get(base_name))
+            .map(String::as_str);
         let metadata = UploadInfo {
             store_path: path,
             references: &info.references,
             deriver: info.deriver.as_deref(),
-            system: None,
+            system,
             ca: info.ca.as_deref(),
             nar_hash: &info.nar_hash,
             nar_size: info.nar_size,

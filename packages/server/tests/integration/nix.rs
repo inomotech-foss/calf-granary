@@ -1,6 +1,8 @@
 //! Serving Nix binary caches.
 
+use std::fs;
 use std::path::Path;
+use std::process::Stdio;
 
 use aws_lc_rs::digest::{SHA256, digest};
 use aws_lc_rs::signature::{ED25519, UnparsedPublicKey};
@@ -9,6 +11,7 @@ use base64::engine::general_purpose::STANDARD;
 use reqwest::StatusCode;
 use reqwest::header::{AUTHORIZATION, CONTENT_LENGTH};
 use serde_json::{Value, json};
+use tokio::io::AsyncWriteExt as _;
 use tokio::process::Command;
 
 use crate::harness::{SERVER_BIN, Server, Stack};
@@ -396,6 +399,40 @@ async fn run_nix(dir: &Path, store: &str, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
+/// Registers an output of a derivation in the store at `dir/source` without
+/// building it, since chroot stores can't build on every platform.
+async fn register_built(dir: &Path, store: &str) -> String {
+    let expression = r#"
+        let built = derivation { name = "built"; system = "riscv64-linux"; builder = "/bin/sh"; };
+        in "${built.drvPath} ${built.outPath}"
+    "#;
+    let paths = run_nix(dir, store, &["nix", "eval", "--raw", "--expr", expression]).await;
+    let (deriver, output) = paths.split_once(' ').unwrap();
+    fs::write(
+        dir.join("source").join(output.trim_start_matches('/')),
+        "built",
+    )
+    .unwrap();
+    let mut register = Command::new("nix-store")
+        .arg("--register-validity")
+        .env("NIX_REMOTE", store)
+        .env("HOME", dir)
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = register.stdin.take().unwrap();
+    stdin
+        .write_all(format!("{output}\n{deriver}\n0\n").as_bytes())
+        .await
+        .unwrap();
+    drop(stdin);
+    assert!(
+        register.wait().await.unwrap().success(),
+        "the output is registered"
+    );
+    output.to_owned()
+}
+
 /// Pushes a store path from `store` with the client.
 async fn push_with_client(server: &Server, token: &str, dir: &Path, store: &str, path: &str) {
     let output = Command::new(Path::new(SERVER_BIN).with_file_name("calf-granary-client"))
@@ -516,6 +553,34 @@ async fn round_trips_with_nix() {
     assert!(
         content.starts_with("uses /nix/store/"),
         "the content arrives: {content}"
+    );
+    assert!(server.stop().await.success(), "serve stops cleanly");
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres, object storage and Nix"]
+async fn records_the_system_of_built_paths() {
+    let stack = Stack::new(CACHES).await;
+    stack.write("main.key", MAIN_KEY);
+    stack.write("pr.key", PR_KEY);
+    stack.migrate().await;
+    let server = stack.serve().await;
+    let token = stack.token(&["nix-main"]).await;
+    let dir = stack.dir();
+    let source = format!("local?root={}", dir.join("source").display());
+
+    let built = register_built(&dir, &source).await;
+    push_with_client(&server, &token, &dir, &source, &built).await;
+    let hash = built
+        .trim_start_matches("/nix/store/")
+        .split('-')
+        .next()
+        .unwrap();
+    let (_, narinfo) = text(&server, &format!("nix-main/{hash}.narinfo")).await;
+    assert_eq!(
+        field(&narinfo, "System"),
+        "riscv64-linux",
+        "the system comes from the deriver: {narinfo}"
     );
     assert!(server.stop().await.success(), "serve stops cleanly");
 }
