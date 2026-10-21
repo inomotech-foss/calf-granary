@@ -4,6 +4,28 @@ rec {
 
   curl = "${lib.getExe pkgs.curl} --fail --silent --show-error";
 
+  # A CA and a certificate for 127.0.0.1, created once per directory.
+  postgresTls = pkgs.writeShellScript "granary-postgres-tls" ''
+    set -eu
+    dir=$1
+    [ -f "$dir/server.crt" ] && exit 0
+    mkdir -p "$dir"
+    cd "$dir"
+    openssl=${lib.getExe pkgs.openssl}
+    $openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+      -days 3650 -subj /CN=granary-test-ca -keyout ca.key -out ca.crt \
+      -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign
+    $openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+      -subj /CN=127.0.0.1 -keyout server.key -out server.csr
+    printf 'subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n' >server.ext
+    $openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+      -days 3650 -extfile server.ext -out server.crt
+    chmod 600 server.key
+  '';
+
+  postgresTlsOptions =
+    dir: "-c ssl=on -c ssl_cert_file=${dir}/server.crt -c ssl_key_file=${dir}/server.key";
+
   s3Config = (pkgs.formats.json { }).generate "granary-s3.json" {
     identities = [
       {

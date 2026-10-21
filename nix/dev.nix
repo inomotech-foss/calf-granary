@@ -29,8 +29,10 @@ in
         if [ ! -f "$data/PG_VERSION" ]; then
           ${postgresql}/bin/initdb --pgdata "$data" --username postgres --auth trust --no-sync
         fi
+        ${services.postgresTls} "$GRANARY_DEV_DIR/tls"
         exec ${postgresql}/bin/postgres -D "$data" -k "$GRANARY_DEV_DIR" \
-          -c listen_addresses=127.0.0.1 -c port=15432
+          -c listen_addresses=127.0.0.1 -c port=15432 \
+          ${services.postgresTlsOptions "$GRANARY_DEV_DIR/tls"}
       '';
 
       seaweedfs = pkgs.writeShellScript "granary-dev-seaweedfs" ''
@@ -110,7 +112,8 @@ in
 
           cat >"$GRANARY_DEV_DIR/env" <<EOF
           export GRANARY_CONFIG=${granaryConfig}
-          export GRANARY_DATABASE_URL="host=$GRANARY_DEV_DIR port=15432 user=postgres dbname=postgres"
+          export GRANARY_DATABASE_URL="host=127.0.0.1 port=15432 user=postgres dbname=postgres sslmode=require"
+          export GRANARY_DATABASE_CA=$GRANARY_DEV_DIR/tls/ca.crt
           export GRANARY_LISTEN=127.0.0.1:18080
           export GRANARY_TOKEN_SECRET=$(cat "$secret")
           export AWS_ENDPOINT=http://127.0.0.1:18333

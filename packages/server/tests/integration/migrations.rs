@@ -17,6 +17,27 @@ async fn serve_refuses_pending_migrations() {
 
 #[tokio::test]
 #[ignore = "needs Postgres and object storage"]
+async fn refuses_untrusted_database_servers() {
+    let stack = Stack::new("caches = {}").await;
+    let output = stack
+        .command(&["migrate"])
+        .env_remove("GRANARY_DATABASE_CA")
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "a server certificate from an unknown CA is refused"
+    );
+    assert!(
+        text(&output).contains("failed to connect"),
+        "the connection fails: {}",
+        text(&output)
+    );
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres and object storage"]
 async fn migrate_is_idempotent() {
     let stack = Stack::new("caches = {}").await;
     stack.migrate().await;

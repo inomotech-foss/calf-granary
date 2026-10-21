@@ -9,10 +9,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::{env, fs, process, thread};
 
 use reqwest::StatusCode;
+use rustls::crypto::aws_lc_rs;
+use rustls::{ClientConfig, RootCertStore};
+use rustls_pki_types::CertificateDer;
+use rustls_pki_types::pem::PemObject as _;
 use tokio::process::{Child, Command};
 use tokio::runtime::Builder;
 use tokio::time;
-use tokio_postgres::{Client, NoTls};
+use tokio_postgres::Client;
+use tokio_postgres_rustls::MakeRustlsConnect;
 
 /// The binary under test.
 const SERVER: &str = env!("CARGO_BIN_EXE_calf-granary-server");
@@ -29,8 +34,9 @@ static COUNTER: AtomicU32 = AtomicU32::new(0);
 /// A database, a key prefix and a configuration file of one test.
 ///
 /// Expects `GRANARY_DATABASE_URL` in the key=value form, with a role that may
-/// create databases, and the `AWS_*` variables of the object storage. The
-/// bucket is `GRANARY_TEST_BUCKET`, `granary-test` by default.
+/// create databases, `GRANARY_DATABASE_CA` for TLS, and the `AWS_*` variables
+/// of the object storage. The bucket is `GRANARY_TEST_BUCKET`, `granary-test`
+/// by default.
 pub(crate) struct Stack {
     /// Names the database and the key prefix.
     id: String,
@@ -255,8 +261,23 @@ pub(crate) fn text(output: &Output) -> String {
 }
 
 /// Connects to Postgres and drives the connection in the background.
+///
+/// Trusts the CA in `GRANARY_DATABASE_CA`.
 async fn connect(url: &str) -> Client {
-    let (client, connection) = tokio_postgres::connect(url, NoTls).await.unwrap();
+    let mut roots = RootCertStore::empty();
+    if let Some(path) = env::var_os("GRANARY_DATABASE_CA") {
+        for certificate in CertificateDer::pem_file_iter(path).unwrap() {
+            roots.add(certificate.unwrap()).unwrap();
+        }
+    }
+    let config = ClientConfig::builder_with_provider(aws_lc_rs::default_provider().into())
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let (client, connection) = tokio_postgres::connect(url, MakeRustlsConnect::new(config))
+        .await
+        .unwrap();
     tokio::spawn(connection);
     client
 }
