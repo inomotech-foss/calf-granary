@@ -9,7 +9,13 @@
     };
     repository.forge = "forgejo";
     commitMessage.format = "conventional";
-    rust.enable = true;
+    rust = {
+      enable = true;
+      clippy.sourceItemOrdering = [
+        "module"
+        "trait"
+      ];
+    };
     # PN is the recipe name in BitBake's hash equivalence protocol.
     typos.default.extendWords.pn = "pn";
   };
