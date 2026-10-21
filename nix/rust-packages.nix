@@ -51,8 +51,6 @@ in
           cargoExtraArgs = "--locked --workspace";
         }
       );
-    in
-    {
       packages = lib.mapAttrs (
         _: package:
         craneLib.buildPackage (
@@ -65,5 +63,9 @@ in
           }
         )
       ) cfg.packages;
+    in
+    {
+      inherit packages;
+      checks = lib.mapAttrs' (name: package: lib.nameValuePair "package-${name}" package) packages;
     };
 }
