@@ -42,6 +42,11 @@ impl Pattern {
 pub(crate) struct Requirements(BTreeMap<String, Vec<Pattern>>);
 
 impl Requirements {
+    /// Whether there are no requirements, so every token is allowed.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     /// Checks whether the claims meet every requirement.
     pub(crate) fn allow(&self, claims: &Map<String, Value>) -> bool {
         self.0.iter().all(|(name, patterns)| {

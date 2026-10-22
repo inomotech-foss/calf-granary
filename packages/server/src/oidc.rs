@@ -41,9 +41,33 @@ pub(crate) struct IssuerConfig {
     /// The audience that tokens must be issued for.
     audience: String,
     /// Patterns that every token from this issuer must match.
-    #[serde(default)]
-    claims: Requirements,
+    claims: Restrictions,
 }
+
+/// Claim patterns that limit an issuer to the expected repositories.
+///
+/// A forge signs tokens for every repository on it, so an issuer without
+/// patterns would hand out granary tokens to all of them.
+#[derive(Debug, Deserialize)]
+#[serde(try_from = "Requirements")]
+struct Restrictions(Requirements);
+
+impl TryFrom<Requirements> for Restrictions {
+    type Error = Unrestricted;
+
+    fn try_from(requirements: Requirements) -> Result<Self, Self::Error> {
+        if requirements.is_empty() {
+            Err(Unrestricted)
+        } else {
+            Ok(Self(requirements))
+        }
+    }
+}
+
+/// An issuer has no claim patterns.
+#[derive(Debug, thiserror::Error)]
+#[error("issuer claims must not be empty, restrict them to your repositories")]
+pub(crate) struct Unrestricted;
 
 /// The part of the OIDC discovery document that is needed.
 #[derive(Debug, Deserialize)]
@@ -82,7 +106,7 @@ impl Issuer {
         Self {
             url: config.issuer,
             audience: config.audience,
-            claims: config.claims,
+            claims: config.claims.0,
             client,
             keys: Mutex::new(None),
         }
@@ -216,6 +240,20 @@ mod tests {
         }))
         .unwrap();
         Issuer::new(config, Client::new())
+    }
+
+    #[test]
+    fn requires_claim_patterns() {
+        for claims in [json!({}), Value::Null] {
+            let mut config = json!({ "issuer": "https://forge", "audience": "granary" });
+            if !claims.is_null() {
+                config["claims"] = claims;
+            }
+            assert!(
+                serde_json::from_value::<IssuerConfig>(config).is_err(),
+                "issuers without claim patterns are refused"
+            );
+        }
     }
 
     #[tokio::test]

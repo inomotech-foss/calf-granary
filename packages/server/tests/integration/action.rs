@@ -100,6 +100,7 @@ signing_key = "$dir/pr.key"
 [issuers.forge]
 issuer = "{forge}"
 audience = "calf-granary"
+claims = {{ repository_owner = ["inomotech"] }}
 
 [[tiers]]
 name = "pr"
