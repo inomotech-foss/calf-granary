@@ -10,14 +10,10 @@ let
   # Target system names and the nixpkgs cross package sets that build for them.
   targets = {
     x86_64-linux = "musl64";
-    aarch64-linux = "aarch64-multiplatform-musl";
   };
 in
 {
-  ephemeris.rust.toolchain.targets = [
-    "aarch64-unknown-linux-musl"
-    "x86_64-unknown-linux-musl"
-  ];
+  ephemeris.rust.toolchain.targets = [ "x86_64-unknown-linux-musl" ];
 
   perSystem =
     { pkgs, system, ... }:
