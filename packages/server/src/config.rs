@@ -30,6 +30,9 @@ const DEFAULT_NIX_PRIORITY: u32 = 41;
 /// How long unreferenced content is kept unless configured.
 const DEFAULT_COLLECTION_GRACE: Duration = Duration::from_hours(24);
 
+/// The shortest grace period that is safe for slow uploads.
+const SAFE_COLLECTION_GRACE: Duration = Duration::from_hours(1);
+
 /// How long issued tokens are valid unless configured.
 const DEFAULT_TOKEN_LIFETIME: Duration = Duration::from_hours(6);
 
@@ -93,6 +96,12 @@ impl Config {
         let grace = self
             .collection_grace
             .map_or(DEFAULT_COLLECTION_GRACE, Into::into);
+        if grace < SAFE_COLLECTION_GRACE {
+            tracing::warn!(
+                grace_seconds = grace.as_secs(),
+                "collection_grace is short, uploads that take longer fail"
+            );
+        }
         Ok(Content::new(Stores::new(stores), grace))
     }
 

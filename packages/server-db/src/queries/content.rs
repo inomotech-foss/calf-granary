@@ -455,25 +455,20 @@ where
         Ok(mapped)
     }
 }
-pub struct ChronoDateTimechronoFixedOffsetQuery<'c, 'a, 's, C: GenericClient, T, const N: usize> {
+pub struct BoolQuery<'c, 'a, 's, C: GenericClient, T, const N: usize> {
     client: &'c C,
     params: [&'a (dyn postgres_types::ToSql + Sync); N],
     query: &'static str,
     cached: Option<&'s tokio_postgres::Statement>,
-    extractor: fn(
-        &tokio_postgres::Row,
-    ) -> Result<chrono::DateTime<chrono::FixedOffset>, tokio_postgres::Error>,
-    mapper: fn(chrono::DateTime<chrono::FixedOffset>) -> T,
+    extractor: fn(&tokio_postgres::Row) -> Result<bool, tokio_postgres::Error>,
+    mapper: fn(bool) -> T,
 }
-impl<'c, 'a, 's, C, T: 'c, const N: usize> ChronoDateTimechronoFixedOffsetQuery<'c, 'a, 's, C, T, N>
+impl<'c, 'a, 's, C, T: 'c, const N: usize> BoolQuery<'c, 'a, 's, C, T, N>
 where
     C: GenericClient,
 {
-    pub fn map<R>(
-        self,
-        mapper: fn(chrono::DateTime<chrono::FixedOffset>) -> R,
-    ) -> ChronoDateTimechronoFixedOffsetQuery<'c, 'a, 's, C, R, N> {
-        ChronoDateTimechronoFixedOffsetQuery {
+    pub fn map<R>(self, mapper: fn(bool) -> R) -> BoolQuery<'c, 'a, 's, C, R, N> {
+        BoolQuery {
             client: self.client,
             params: self.params,
             query: self.query,
@@ -524,20 +519,25 @@ where
         Ok(mapped)
     }
 }
-pub struct BoolQuery<'c, 'a, 's, C: GenericClient, T, const N: usize> {
+pub struct ChronoDateTimechronoFixedOffsetQuery<'c, 'a, 's, C: GenericClient, T, const N: usize> {
     client: &'c C,
     params: [&'a (dyn postgres_types::ToSql + Sync); N],
     query: &'static str,
     cached: Option<&'s tokio_postgres::Statement>,
-    extractor: fn(&tokio_postgres::Row) -> Result<bool, tokio_postgres::Error>,
-    mapper: fn(bool) -> T,
+    extractor: fn(
+        &tokio_postgres::Row,
+    ) -> Result<chrono::DateTime<chrono::FixedOffset>, tokio_postgres::Error>,
+    mapper: fn(chrono::DateTime<chrono::FixedOffset>) -> T,
 }
-impl<'c, 'a, 's, C, T: 'c, const N: usize> BoolQuery<'c, 'a, 's, C, T, N>
+impl<'c, 'a, 's, C, T: 'c, const N: usize> ChronoDateTimechronoFixedOffsetQuery<'c, 'a, 's, C, T, N>
 where
     C: GenericClient,
 {
-    pub fn map<R>(self, mapper: fn(bool) -> R) -> BoolQuery<'c, 'a, 's, C, R, N> {
-        BoolQuery {
+    pub fn map<R>(
+        self,
+        mapper: fn(chrono::DateTime<chrono::FixedOffset>) -> R,
+    ) -> ChronoDateTimechronoFixedOffsetQuery<'c, 'a, 's, C, R, N> {
+        ChronoDateTimechronoFixedOffsetQuery {
             client: self.client,
             params: self.params,
             query: self.query,
@@ -1209,6 +1209,40 @@ impl<'c, 'a, 's, C: GenericClient, T1: crate::BytesSql>
         params: &'a InsertBlobParams<T1>,
     ) -> InsertBlobQuery<'c, 'a, 's, C, InsertBlob, 2> {
         self.bind(client, &params.hash, &params.size)
+    }
+}
+pub struct ClaimChunksStmt(&'static str, Option<tokio_postgres::Statement>);
+pub fn claim_chunks() -> ClaimChunksStmt {
+    ClaimChunksStmt(
+        "WITH claimed AS ( SELECT id FROM chunk WHERE id = any($1::bigint[]) AND state = 'valid' \
+         ORDER BY id FOR NO KEY UPDATE ), touched AS ( UPDATE chunk SET touched_at = now() FROM \
+         claimed WHERE chunk.id = claimed.id RETURNING chunk.id ) SELECT (SELECT count(*) FROM \
+         touched) = (SELECT count(DISTINCT id) FROM unnest($1::bigint[]) AS requested (id)) AS \
+         all_valid",
+        None,
+    )
+}
+impl ClaimChunksStmt {
+    pub async fn prepare<'a, C: GenericClient>(
+        mut self,
+        client: &'a C,
+    ) -> Result<Self, tokio_postgres::Error> {
+        self.1 = Some(client.prepare(self.0).await?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient, T1: crate::ArraySql<Item = i64>>(
+        &'s self,
+        client: &'c C,
+        ids: &'a T1,
+    ) -> BoolQuery<'c, 'a, 's, C, bool, 1> {
+        BoolQuery {
+            client,
+            params: [ids],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |row| Ok(row.try_get(0)?),
+            mapper: |it| it,
+        }
     }
 }
 pub struct InsertBlobChunksStmt(&'static str, Option<tokio_postgres::Statement>);

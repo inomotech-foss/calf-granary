@@ -7,7 +7,7 @@ use aws_lc_rs::error::Unspecified;
 use bytes::Bytes;
 use calf_granary_server_db::client::GenericClient;
 use calf_granary_server_db::queries::content::{
-    insert_blob, insert_blob_chunks, insert_chunk, touch_chunk,
+    claim_chunks, insert_blob, insert_blob_chunks, insert_chunk, touch_chunk,
 };
 use calf_granary_server_db::types::ChunkCompression;
 use deadpool_postgres::{Pool, PoolError};
@@ -173,7 +173,8 @@ impl Content {
 
     /// Records a blob and its chunks and returns its ID.
     ///
-    /// Run this in the transaction that references the blob.
+    /// Run this in the transaction that references the blob. Fails if
+    /// collection took a chunk while the blob was uploaded.
     pub(crate) async fn commit<C>(&self, client: &C, blob: &NewBlob) -> Result<i64, WriteError>
     where
         C: GenericClient + Sync,
@@ -184,6 +185,13 @@ impl Content {
             .one()
             .await?;
         if row.inserted {
+            let all_valid = claim_chunks()
+                .bind(client, &blob.chunks.as_slice())
+                .one()
+                .await?;
+            if !all_valid {
+                return Err(WriteError::Collected);
+            }
             insert_blob_chunks()
                 .bind(client, &row.id, &blob.chunks.as_slice())
                 .await?;
@@ -198,6 +206,9 @@ pub(crate) enum WriteError {
     /// Reading the body failed, usually because the client disconnected.
     #[error("failed to read the content")]
     Body(#[source] Box<dyn Error + Send + Sync>),
+    /// Collection deleted a chunk before the blob was recorded.
+    #[error("a chunk was collected during the upload")]
+    Collected,
     /// Compressing a chunk failed.
     #[error("failed to compress a chunk")]
     Compress(#[source] io::Error),

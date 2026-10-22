@@ -25,6 +25,25 @@ ON CONFLICT (hash) DO UPDATE
 SET touched_at = now()
 RETURNING id, old.id IS NULL AS inserted;
 
+--! claim_chunks
+WITH claimed AS (
+    SELECT id
+    FROM chunk
+    WHERE id = any(:ids::bigint[]) AND state = 'valid'
+    ORDER BY id
+    FOR NO KEY UPDATE
+),
+touched AS (
+    UPDATE chunk
+    SET touched_at = now()
+    FROM claimed
+    WHERE chunk.id = claimed.id
+    RETURNING chunk.id
+)
+SELECT
+    (SELECT count(*) FROM touched)
+    = (SELECT count(DISTINCT id) FROM unnest(:ids::bigint[]) AS requested (id)) AS all_valid;
+
 --! insert_blob_chunks
 INSERT INTO blob_chunk (blob_id, seq, chunk_id)
 SELECT :blob_id::bigint, ordinality - 1, chunk_id
