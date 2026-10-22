@@ -71,6 +71,12 @@ pub struct InsertOuthashParams<
     pub outhash_siginfo: Option<T10>,
 }
 #[derive(Debug)]
+pub struct LockOuthashParams<T1: crate::StringSql, T2: crate::StringSql, T3: crate::BytesSql> {
+    pub cache: T1,
+    pub method: T2,
+    pub outhash: T3,
+}
+#[derive(Debug)]
 pub struct FindEquivalentParams<
     T1: crate::StringSql,
     T2: crate::StringSql,
@@ -926,6 +932,65 @@ impl<
             &params.task,
             &params.outhash_siginfo,
         ))
+    }
+}
+pub struct LockOuthashStmt(&'static str, Option<tokio_postgres::Statement>);
+pub fn lock_outhash() -> LockOuthashStmt {
+    LockOuthashStmt(
+        "WITH locked AS ( SELECT pg_advisory_xact_lock( hashtextextended($1::text || ' ' || \
+         $2::text || ' ' || encode($3::bytea, 'hex'), 0) ) ) SELECT count(*) AS locked FROM locked",
+        None,
+    )
+}
+impl LockOuthashStmt {
+    pub async fn prepare<'a, C: GenericClient>(
+        mut self,
+        client: &'a C,
+    ) -> Result<Self, tokio_postgres::Error> {
+        self.1 = Some(client.prepare(self.0).await?);
+        Ok(self)
+    }
+    pub fn bind<
+        'c,
+        'a,
+        's,
+        C: GenericClient,
+        T1: crate::StringSql,
+        T2: crate::StringSql,
+        T3: crate::BytesSql,
+    >(
+        &'s self,
+        client: &'c C,
+        cache: &'a T1,
+        method: &'a T2,
+        outhash: &'a T3,
+    ) -> I64Query<'c, 'a, 's, C, i64, 3> {
+        I64Query {
+            client,
+            params: [cache, method, outhash],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |row| Ok(row.try_get(0)?),
+            mapper: |it| it,
+        }
+    }
+}
+impl<'c, 'a, 's, C: GenericClient, T1: crate::StringSql, T2: crate::StringSql, T3: crate::BytesSql>
+    crate::client::async_::Params<
+        'c,
+        'a,
+        's,
+        LockOuthashParams<T1, T2, T3>,
+        I64Query<'c, 'a, 's, C, i64, 3>,
+        C,
+    > for LockOuthashStmt
+{
+    fn params(
+        &'s self,
+        client: &'c C,
+        params: &'a LockOuthashParams<T1, T2, T3>,
+    ) -> I64Query<'c, 'a, 's, C, i64, 3> {
+        self.bind(client, &params.cache, &params.method, &params.outhash)
     }
 }
 pub struct FindEquivalentStmt(&'static str, Option<tokio_postgres::Statement>);

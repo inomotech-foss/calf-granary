@@ -83,6 +83,14 @@ VALUES (
 )
 ON CONFLICT DO NOTHING;
 
+--! lock_outhash
+WITH locked AS (
+    SELECT pg_advisory_xact_lock(
+        hashtextextended(:cache::text || ' ' || :method::text || ' ' || encode(:outhash::bytea, 'hex'), 0)
+    )
+)
+SELECT count(*) AS locked FROM locked;
+
 --! find_equivalent
 SELECT hashserv_unihash.unihash
 FROM hashserv_outhash

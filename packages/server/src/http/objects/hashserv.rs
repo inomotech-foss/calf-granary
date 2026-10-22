@@ -409,11 +409,7 @@ impl Handler<'_> {
     }
 
     /// Answers `report`, recording it only for clients that may report.
-    async fn report(
-        &self,
-        client: &Client,
-        request: &ReportRequest<'_>,
-    ) -> Result<Utf8Bytes, Failure> {
+    async fn report(&self, request: &ReportRequest<'_>) -> Result<Utf8Bytes, Failure> {
         let mut report = Report {
             method: &request.method,
             taskhash: request.taskhash,
@@ -429,9 +425,15 @@ impl Handler<'_> {
         let unihash = match &self.login {
             Some(login) if login.can_report => {
                 report.owner = Some(&login.subject);
-                self.cache.report(client, &report).await?
+                self.cache
+                    .report(&mut self.client().await?, &report)
+                    .await?
             }
-            Some(_) | None => self.cache.report_read_only(client, &report).await?,
+            Some(_) | None => {
+                self.cache
+                    .report_read_only(&self.client().await?, &report)
+                    .await?
+            }
         };
         json(&UnihashReply {
             taskhash: report.taskhash,
@@ -619,7 +621,7 @@ impl Session<'_> {
                 self.stream(StreamKind::Exists, lines).await?;
                 return Ok(None);
             }
-            Request::Report(request) => handler.report(&handler.client().await?, &request).await?,
+            Request::Report(request) => handler.report(&request).await?,
             Request::ReportEquiv(request) => {
                 handler
                     .report_equiv(&handler.client().await?, &request)

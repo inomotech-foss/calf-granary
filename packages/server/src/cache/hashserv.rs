@@ -2,7 +2,7 @@
 
 use calf_granary_server_db::queries::hashserv::{
     HashservReport, existing_unihashes, expire_unihashes, find_equivalent, find_outhash, find_task,
-    find_unihash, find_unihashes, insert_outhash, insert_unihash, touch_unihashes,
+    find_unihash, find_unihashes, insert_outhash, insert_unihash, lock_outhash, touch_unihashes,
 };
 use chrono::{DateTime, FixedOffset, Utc};
 use deadpool_postgres::Client;
@@ -244,18 +244,30 @@ impl Cache {
     ///
     /// The first output hash wins: a new report adopts the unihash of the
     /// oldest other task with the same output hash, here or in the fallback.
+    /// Reports of the same output hash wait for each other.
     pub(crate) async fn report(
         &self,
-        client: &Client,
+        client: &mut Client,
         report: &Report<'_>,
     ) -> Result<Sha256, HashservError> {
         let method = report.method;
         let taskhash = report.taskhash.as_bytes().as_slice();
         let outhash = report.outhash.as_bytes().as_slice();
+        let transaction = client.transaction().await?;
+        lock_outhash()
+            .bind(&transaction, &self.name.as_ref(), &method, &outhash)
+            .one()
+            .await?;
         let mut equivalent = None;
         for cache in self.lookup_chain() {
             equivalent = find_equivalent()
-                .bind(client, &cache.name.as_ref(), &method, &outhash, &taskhash)
+                .bind(
+                    &transaction,
+                    &cache.name.as_ref(),
+                    &method,
+                    &outhash,
+                    &taskhash,
+                )
                 .opt()
                 .await?;
             if equivalent.is_some() {
@@ -266,11 +278,17 @@ impl Cache {
             .as_deref()
             .unwrap_or(report.unihash.as_bytes().as_slice());
         insert_unihash()
-            .bind(client, &self.name.as_ref(), &method, &taskhash, &unihash)
+            .bind(
+                &transaction,
+                &self.name.as_ref(),
+                &method,
+                &taskhash,
+                &unihash,
+            )
             .await?;
         insert_outhash()
             .bind(
-                client,
+                &transaction,
                 &self.name.as_ref(),
                 &method,
                 &taskhash,
@@ -283,6 +301,7 @@ impl Cache {
                 &report.outhash_siginfo,
             )
             .await?;
+        transaction.commit().await?;
         self.current_unihash(client, method, report.taskhash, report.unihash)
             .await
     }
