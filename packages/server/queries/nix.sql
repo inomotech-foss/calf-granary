@@ -44,4 +44,5 @@ SELECT entry.blob_id, blob.hash, blob.size, nix_upload.file_hash, nix_upload.fil
 FROM nix_upload
 JOIN entry USING (cache, key)
 JOIN blob ON blob.id = entry.blob_id
-WHERE nix_upload.cache = :cache::text AND nix_upload.key = :key::text;
+WHERE nix_upload.cache = :cache::text AND nix_upload.key = :key::text
+FOR SHARE OF entry;

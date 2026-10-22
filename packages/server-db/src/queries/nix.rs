@@ -627,7 +627,7 @@ pub fn find_nix_upload() -> FindNixUploadStmt {
     FindNixUploadStmt(
         "SELECT entry.blob_id, blob.hash, blob.size, nix_upload.file_hash, nix_upload.file_size \
          FROM nix_upload JOIN entry USING (cache, key) JOIN blob ON blob.id = entry.blob_id WHERE \
-         nix_upload.cache = $1::text AND nix_upload.key = $2::text",
+         nix_upload.cache = $1::text AND nix_upload.key = $2::text FOR SHARE OF entry",
         None,
     )
 }
