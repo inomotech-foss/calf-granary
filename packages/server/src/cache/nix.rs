@@ -18,7 +18,10 @@ use tokio_util::io::{ReaderStream, StreamReader};
 
 use super::{Cache, CacheName, NoStore, ObjectKey, Stored};
 use crate::content::{Content, WriteError};
-use crate::nix::{InvalidStorePath, PathInfo, StorePath, StorePathHash, UploadedNarInfo};
+use crate::nix::{
+    InfoValue, InvalidInfoValue, InvalidStorePath, PathInfo, StorePath, StorePathHash,
+    UploadedNarInfo,
+};
 use crate::sha256::{Hasher, InvalidSha256};
 
 /// A store path found in a cache.
@@ -58,8 +61,8 @@ impl Cache {
                     .map(StorePath::from_base_name)
                     .collect::<Result<_, _>>()?,
                 deriver: row.deriver.map(StorePath::from_base_name).transpose()?,
-                system: row.system,
-                ca: row.ca,
+                system: row.system.map(InfoValue::try_from).transpose()?,
+                ca: row.ca.map(InfoValue::try_from).transpose()?,
                 nar_hash: row.hash.as_slice().try_into()?,
                 nar_size: u64::try_from(row.size).unwrap_or_default(),
             };
@@ -289,6 +292,9 @@ pub(crate) enum NixLookupError {
     /// A recorded NAR hash isn't a SHA-256 digest.
     #[error("the database returned an invalid NAR hash")]
     Digest(#[from] InvalidSha256),
+    /// A recorded narinfo value is invalid.
+    #[error(transparent)]
+    InfoValue(#[from] InvalidInfoValue),
     /// A recorded store path is invalid.
     #[error(transparent)]
     StorePath(#[from] InvalidStorePath),
@@ -338,8 +344,8 @@ where
             &path.store_path.name(),
             &references.as_slice(),
             &path.deriver.as_ref().map(StorePath::base_name),
-            &path.system.as_deref(),
-            &path.ca.as_deref(),
+            &path.system.as_ref().map(AsRef::as_ref),
+            &path.ca.as_ref().map(AsRef::as_ref),
         )
         .await
         .map(drop)

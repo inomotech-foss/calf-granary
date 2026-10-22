@@ -28,6 +28,9 @@ CREATE DOMAIN nix_path_name AS text
 CREATE DOMAIN nix_base_name AS text
     CHECK (VALUE ~ '^[0-9a-df-np-sv-z]{32}-[A-Za-z0-9+_?=-][A-Za-z0-9+._?=-]{0,210}$');
 
+CREATE DOMAIN nix_info_value AS text
+    CHECK (VALUE <> '' AND VALUE !~ '[[:cntrl:]]');
+
 CREATE DOMAIN hashserv_method AS text
     CHECK (VALUE ~ '^\S+$');
 

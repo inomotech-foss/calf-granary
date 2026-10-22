@@ -21,7 +21,9 @@ use super::metrics::{Lookup, Upload};
 use crate::access::Accessed;
 use crate::cache::{Cache, NarCompression, NixCache, NixPutError, ObjectKey, Protocol, Stored};
 use crate::content::{Encoding, WriteError};
-use crate::nix::{NarInfo, PathInfo, StorePath, StorePathHash, UploadedNarInfo, parse_sha256};
+use crate::nix::{
+    InfoValue, NarInfo, PathInfo, StorePath, StorePathHash, UploadedNarInfo, parse_sha256,
+};
 
 /// The largest narinfo that `nix copy` may upload, and the largest metadata
 /// of an upload.
@@ -94,8 +96,8 @@ impl UploadInfo {
                 Some(deriver) => Some(parse(deriver)?),
                 None => None,
             },
-            system: self.system,
-            ca: self.ca,
+            system: self.system.map(InfoValue::try_from).transpose().ok()?,
+            ca: self.ca.map(InfoValue::try_from).transpose().ok()?,
             nar_hash: parse_sha256(&self.nar_hash)?,
             nar_size: self.nar_size,
         })

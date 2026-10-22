@@ -4,8 +4,8 @@ CREATE TABLE nix_path (
     name nix_path_name NOT NULL,
     refs nix_base_name[] NOT NULL CHECK (array_position(refs, NULL) IS NULL),
     deriver nix_base_name,
-    system text CHECK (system <> ''),
-    ca text CHECK (ca <> ''),
+    system nix_info_value,
+    ca nix_info_value,
     PRIMARY KEY (cache, key),
     FOREIGN KEY (cache, key) REFERENCES entry ON DELETE CASCADE
 );

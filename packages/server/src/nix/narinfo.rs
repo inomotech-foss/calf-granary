@@ -3,7 +3,7 @@
 use core::fmt::{self, Write as _};
 
 use super::base32::Base32;
-use super::path_info::{PathInfo, parse_sha256};
+use super::path_info::{InfoValue, PathInfo, parse_sha256};
 use super::signing::SigningKey;
 use super::store_path::StorePath;
 use crate::sha256::Sha256;
@@ -112,6 +112,12 @@ impl UploadedNarInfo {
             *field = Some(value);
         }
         let parse_path = |base_name: &str| StorePath::from_base_name(base_name.to_owned()).ok();
+        let info_value = |value: Option<&str>| {
+            value
+                .map(|value| InfoValue::try_from(value.to_owned()))
+                .transpose()
+                .ok()
+        };
         let references = match fields.references.unwrap_or_default() {
             "" => Vec::new(),
             references => references
@@ -128,8 +134,8 @@ impl UploadedNarInfo {
                 store_path: StorePath::try_from(fields.store_path?.to_owned()).ok()?,
                 references,
                 deriver,
-                system: fields.system.map(str::to_owned),
-                ca: fields.ca.map(str::to_owned),
+                system: info_value(fields.system)?,
+                ca: info_value(fields.ca)?,
                 nar_hash: parse_sha256(fields.nar_hash?)?,
                 nar_size: fields.nar_size?.parse().ok()?,
             },
@@ -188,7 +194,7 @@ mod tests {
                 path("1mdqa9w1p6cmli6976v4wi0sw9r4p5pr-glibc-2.40"),
             ],
             deriver: Some(path("2mdqa9w1p6cmli6976v4wi0sw9r4p5pr-hello-2.12.drv")),
-            system: Some("x86_64-linux".to_owned()),
+            system: Some("x86_64-linux".to_owned().try_into().unwrap()),
             ca: None,
             nar_hash: Sha256::from([0; 32]),
             nar_size: 120,
@@ -289,6 +295,10 @@ mod tests {
         assert!(
             UploadedNarInfo::parse("StorePath: /nix/store/x\n").is_none(),
             "required fields"
+        );
+        assert!(
+            UploadedNarInfo::parse(&format!("{text}System: x86_64-linux\rURL: evil\n")).is_none(),
+            "values stay on their line"
         );
     }
 }

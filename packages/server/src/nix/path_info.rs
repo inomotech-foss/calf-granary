@@ -1,5 +1,7 @@
 //! What Nix knows about a store path.
 
+use core::fmt;
+
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 
@@ -18,14 +20,49 @@ pub(crate) struct PathInfo {
     /// The derivation that built the path.
     pub(crate) deriver: Option<StorePath>,
     /// The system that built the path.
-    pub(crate) system: Option<String>,
+    pub(crate) system: Option<InfoValue>,
     /// The content address of content-addressed paths.
-    pub(crate) ca: Option<String>,
+    pub(crate) ca: Option<InfoValue>,
     /// The SHA-256 of the uncompressed NAR.
     pub(crate) nar_hash: Sha256,
     /// The size of the uncompressed NAR.
     pub(crate) nar_size: u64,
 }
+
+/// A free-form narinfo value, such as `System` or `CA`.
+///
+/// It is not empty and has no control characters, so it stays on its line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct InfoValue(String);
+
+impl TryFrom<String> for InfoValue {
+    type Error = InvalidInfoValue;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value.is_empty() || value.chars().any(char::is_control) {
+            Err(InvalidInfoValue)
+        } else {
+            Ok(Self(value))
+        }
+    }
+}
+
+impl AsRef<str> for InfoValue {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for InfoValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// A narinfo value is empty or spans lines.
+#[derive(Debug, thiserror::Error)]
+#[error("a narinfo value must be one line of text")]
+pub(crate) struct InvalidInfoValue;
 
 /// Parses a SHA-256 hash as Nix prints it: `sha256:` with base32 or
 /// hexadecimal digits, or `sha256-` with base64.

@@ -67,6 +67,10 @@ async fn domains_reject_invalid_values() {
             "'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'::nix_hash_part",
             "a letter outside Nix base32",
         ),
+        (
+            "E'x86_64-linux\\nURL: evil'::nix_info_value",
+            "a narinfo value with a line break",
+        ),
     ];
     for (value, reason) in cases {
         let result = database.execute(&format!("SELECT {value}"), &[]).await;

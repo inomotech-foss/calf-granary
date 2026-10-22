@@ -7,7 +7,7 @@ mod signing;
 mod store_path;
 
 pub(crate) use self::narinfo::{NarInfo, UploadedNarInfo};
-pub(crate) use self::path_info::{PathInfo, parse_sha256};
+pub(crate) use self::path_info::{InfoValue, InvalidInfoValue, PathInfo, parse_sha256};
 #[cfg(test)]
 pub(crate) use self::signing::tests as signing_tests;
 pub(crate) use self::signing::{SigningKey, SigningKeyError};
