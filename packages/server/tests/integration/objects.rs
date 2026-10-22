@@ -316,5 +316,19 @@ async fn answers_missing_keys() {
         serde_json::json!({ "missing": ["c"] }),
         "the fallback counts"
     );
+    let oversized = server
+        .http()
+        .post(server.url("_api/files/main/missing"))
+        .header("content-type", "application/json")
+        .body(vec![b' '; 4 * 1024 * 1024])
+        .send()
+        .await;
+    assert!(
+        oversized
+            .as_ref()
+            .map_or_else(reqwest::Error::is_request, |response| response.status()
+                == StatusCode::PAYLOAD_TOO_LARGE),
+        "large questions are refused unread, possibly before the body is sent: {oversized:?}"
+    );
     assert!(server.stop().await.success(), "serve stops cleanly");
 }

@@ -8,7 +8,7 @@ use core::error::Error;
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::extract::{Path, State};
 use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE, ETAG, LAST_MODIFIED};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse as _, Response};
@@ -145,7 +145,6 @@ pub(super) fn router(
         .route("/_api/nix/{cache}/public-key", get(nix::public_key))
         .route("/_hashserv/{cache}", get(hashserv::connect))
         .route("/_api/files/{cache}/missing", post(missing))
-        .layer(DefaultBodyLimit::disable())
         .with_state(Objects {
             caches,
             content,
