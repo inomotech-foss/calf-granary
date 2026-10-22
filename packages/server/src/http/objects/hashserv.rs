@@ -32,6 +32,12 @@ const PROTOCOL: &str = "OEHASHEQUIV";
 /// The most stream lines answered with one query.
 const STREAM_BATCH: usize = 1000;
 
+/// The longest message, the same as the upstream server's.
+const MAX_MESSAGE: usize = 1024 * 1024;
+
+/// The longest line in stream mode. Real lines hold a method and a hash.
+const MAX_STREAM_LINE: usize = 1024;
+
 /// How long a failed `auth` waits before it answers, as upstream does.
 const AUTH_DELAY: Duration = Duration::from_secs(1);
 
@@ -656,7 +662,7 @@ impl Session<'_> {
             let first = self.recv().await.ok_or(Failure::Close)?;
             let mut ended = is_end(&first);
             if !ended {
-                lines.push(first);
+                lines.push(stream_line(first)?);
             }
             while !ended && lines.len() < STREAM_BATCH {
                 let Some(line) = self.try_recv() else {
@@ -665,7 +671,7 @@ impl Session<'_> {
                 if is_end(&line) {
                     ended = true;
                 } else {
-                    lines.push(line);
+                    lines.push(stream_line(line)?);
                 }
             }
             match kind {
@@ -778,20 +784,23 @@ pub(super) async fn connect(
     if !is_hashserv {
         return StatusCode::NOT_FOUND.into_response();
     }
-    upgrade.on_upgrade(async move |socket| {
-        if let Some(found) = state.caches.get(&cache) {
-            Session {
-                socket,
-                handler: Handler {
-                    state: &state,
-                    cache: found,
-                    login: None,
-                },
+    upgrade
+        .max_message_size(MAX_MESSAGE)
+        .max_frame_size(MAX_MESSAGE)
+        .on_upgrade(async move |socket| {
+            if let Some(found) = state.caches.get(&cache) {
+                Session {
+                    socket,
+                    handler: Handler {
+                        state: &state,
+                        cache: found,
+                        login: None,
+                    },
+                }
+                .run()
+                .await;
             }
-            .run()
-            .await;
-        }
-    })
+        })
 }
 
 /// The default of `with_unihash`.
@@ -811,6 +820,14 @@ fn invoke_error(message: &str) -> Utf8Bytes {
         error: InvokeError { message },
     })
     .unwrap_or_default()
+}
+
+/// Accepts a stream line unless it is too long to be real.
+fn stream_line(line: Utf8Bytes) -> Result<Utf8Bytes, Failure> {
+    if line.len() > MAX_STREAM_LINE {
+        return Err(Failure::Close);
+    }
+    Ok(line)
 }
 
 /// Whether a stream line ends stream mode.

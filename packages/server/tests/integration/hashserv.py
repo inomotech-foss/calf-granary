@@ -60,6 +60,12 @@ check(
     main.report_unihash_equiv(T3, METHOD, U3)["unihash"] == U3,
     "equivalence reports",
 )
+siginfo = "0" * (256 * 1024)
+main.report_unihash("5" * 64, METHOD, "e" * 64, "5" * 64, {"outhash_siginfo": siginfo})
+check(
+    main.get_taskhash(METHOD, "5" * 64, True)["outhash_siginfo"] == siginfo,
+    "large signature data",
+)
 
 pr = hashserv.create_client(pr_url, "ci", pr_token)
 check(pr.get_unihash(METHOD, T1) == U1, "the fallback answers reads")
