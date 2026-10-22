@@ -29,7 +29,7 @@ use crate::hex::Hex;
 use crate::store::{StoreName, Stores};
 
 /// The prefix of chunk objects within a store.
-const CHUNK_PREFIX: &str = "chunks";
+pub(crate) const CHUNK_PREFIX: &str = "chunks";
 
 /// Content in object storage, indexed in Postgres.
 #[derive(Debug)]

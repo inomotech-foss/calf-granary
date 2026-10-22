@@ -15,7 +15,7 @@ use serde::Deserialize;
 use toml::de::Error as TomlError;
 
 use crate::cache::{Cache, CacheName, Caches, NixCache, Protocol, ProtocolName};
-use crate::content::Content;
+use crate::content::{CHUNK_PREFIX, Content};
 use crate::duration::ConfigDuration;
 use crate::exchange::Exchange;
 use crate::nix::{SigningKey, SigningKeyError};
@@ -95,7 +95,22 @@ impl Config {
     }
 
     /// Connects every store to its bucket.
+    ///
+    /// Fails if two stores share objects, since each would collect the
+    /// other's objects.
     pub(crate) fn content(&self) -> Result<Content, ConfigError> {
+        for (store, config) in &self.stores {
+            let shared = self
+                .stores
+                .iter()
+                .find(|(other, other_config)| other != &store && config.contains(other_config));
+            if let Some((other, _)) = shared {
+                return Err(ConfigError::SharedStorage {
+                    store: store.clone(),
+                    other: other.clone(),
+                });
+            }
+        }
         let mut stores = BTreeMap::new();
         for (name, store) in &self.stores {
             stores.insert(name.clone(), store.connect(name)?);
@@ -227,6 +242,20 @@ struct StoreConfig {
 }
 
 impl StoreConfig {
+    /// Whether the other store's chunk objects lie among this store's.
+    fn contains(&self, other: &Self) -> bool {
+        self.bucket == other.bucket && other.chunks().prefix_matches(&self.chunks())
+    }
+
+    /// Where the chunk objects lie in the bucket.
+    fn chunks(&self) -> Path {
+        let prefix = Path::from(self.prefix.as_deref().unwrap_or_default());
+        prefix
+            .parts()
+            .chain(Path::from(CHUNK_PREFIX).parts())
+            .collect()
+    }
+
     /// Creates the client for the bucket.
     fn connect(&self, name: &StoreName) -> Result<Arc<dyn ObjectStore>, ConfigError> {
         let store = AmazonS3Builder::from_env()
@@ -361,6 +390,14 @@ pub(crate) enum ConfigError {
         #[source]
         source: TomlError,
     },
+    /// Two stores share objects.
+    #[error("stores {store} and {other} use the same bucket and prefix")]
+    SharedStorage {
+        /// The store whose prefix contains the other's.
+        store: StoreName,
+        /// The other store.
+        other: StoreName,
+    },
     /// The file can't be read.
     #[error("failed to read {}", path.display())]
     Read {
@@ -411,4 +448,34 @@ pub(crate) enum ConfigError {
         #[source]
         source: object_store::Error,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn store(bucket: &str, prefix: Option<&str>) -> StoreConfig {
+        StoreConfig {
+            bucket: bucket.to_owned(),
+            prefix: prefix.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn finds_stores_that_share_objects() {
+        let root = store("cache", None);
+        assert!(
+            root.contains(&store("cache", Some("/"))),
+            "the same objects"
+        );
+        assert!(
+            !root.contains(&store("cache", Some("short"))),
+            "a prefix next to the chunks"
+        );
+        assert!(
+            root.contains(&store("cache", Some("chunks/old"))),
+            "a prefix within the chunks"
+        );
+        assert!(!root.contains(&store("other", None)), "another bucket");
+    }
 }
