@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { bitbakeConfig, netrc, nixConfig, replaceBlock } from "./config.ts";
-import { anonymousCaches, exchange, type Issued, requestIdToken } from "./granary.ts";
+import { type CacheInfo, exchange, type Issued, publicCaches, requestIdToken } from "./granary.ts";
 import { output } from "./process.ts";
 import {
   booleanInput,
@@ -31,7 +31,7 @@ async function obtainToken(server: string): Promise<Issued | undefined> {
   } catch (err) {
     warning(
       `calf-granary: ${err instanceof Error ? err.message : String(err)}, ` +
-        "reading the anonymous caches without uploading",
+        "reading the public caches without uploading",
     );
     return undefined;
   }
@@ -42,7 +42,7 @@ async function main(): Promise<void> {
   const started = Math.floor(Date.now() / 1000);
   const server = requiredInput("server");
   const issued = await obtainToken(server);
-  const caches = issued?.caches ?? (await anonymousCaches(server));
+  const caches = writableFirst(issued?.caches ?? (await publicCaches(server)));
   if (issued !== undefined) {
     saveState("token", issued.token);
     saveState("started", String(started));
@@ -74,16 +74,22 @@ async function main(): Promise<void> {
   if (bitbakeFile !== "") {
     writeFileSync(bitbakeFile, replaceBlock(readIfExists(bitbakeFile), bitbakeConfig(caches)));
     info(`wrote the BitBake settings to ${bitbakeFile}`);
-    const hashserv = caches.filter((cache) => cache.protocol === "hashserv").map((cache) => cache.url);
-    if (issued !== undefined && hashserv.length > 0) {
+    if (issued !== undefined) {
+      const hashserv = caches.filter((cache) => cache.protocol === "hashserv").map((cache) => cache.url);
+      const machines = [new URL(server).hostname, ...hashserv];
       const homeNetrc = join(homedir(), ".netrc");
-      writeFileSync(homeNetrc, replaceBlock(readIfExists(homeNetrc), netrc(hashserv, issued.token)), {
+      writeFileSync(homeNetrc, replaceBlock(readIfExists(homeNetrc), netrc(machines, issued.token)), {
         mode: 0o600,
       });
       chmodSync(homeNetrc, 0o600);
       saveState("home-netrc", homeNetrc);
     }
   }
+}
+
+/** Orders caches so that BitBake and Nix use the ones the job writes to. */
+function writableFirst(caches: readonly CacheInfo[]): CacheInfo[] {
+  return [...caches].sort((a, b) => Number(b.access === "write") - Number(a.access === "write"));
 }
 
 /** Reads a file, or returns an empty string if there is none. */

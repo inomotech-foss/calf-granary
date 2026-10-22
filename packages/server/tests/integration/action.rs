@@ -247,7 +247,10 @@ async fn sets_up_and_fills_caches() {
         )),
         "BitBake finds the token in netrc: {home_netrc}"
     );
-
+    assert!(
+        home_netrc.contains("machine 127.0.0.1"),
+        "BitBake's fetcher finds the token in netrc: {home_netrc}"
+    );
 
     let built = add_store_path(&envs, "built").await;
     fs::create_dir_all(path("sstate").join(SSTATE).parent().unwrap()).unwrap();
@@ -295,7 +298,7 @@ async fn reads_public_caches_without_id_tokens() {
 
     let log = step("main.ts", &envs).await;
     assert!(
-        log.contains("reading the anonymous caches"),
+        log.contains("reading the public caches"),
         "the job is warned: {log}"
     );
     let exported = file_commands(&dir.join("env"));

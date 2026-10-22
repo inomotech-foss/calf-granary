@@ -5,14 +5,15 @@ import { bitbakeConfig, netrc, nixConfig, replaceBlock } from "./config.ts";
 import type { CacheInfo } from "./granary.ts";
 
 const caches: CacheInfo[] = [
-  { name: "sstate-pr", protocol: "files", role: "sstate", url: "https://g.example/sstate-pr" },
-  { name: "downloads", protocol: "files", role: "downloads", url: "https://g.example/downloads" },
-  { name: "hash-pr", protocol: "hashserv", role: "hashserv", url: "wss://g.example/_hashserv/hash-pr" },
+  { name: "sstate-pr", protocol: "files", role: "sstate", url: "https://g.example/sstate-pr", access: "write" },
+  { name: "downloads", protocol: "files", role: "downloads", url: "https://g.example/downloads", access: "write" },
+  { name: "hash-pr", protocol: "hashserv", role: "hashserv", url: "wss://g.example/_hashserv/hash-pr", access: "write" },
   {
     name: "nix-pr",
     protocol: "nix",
     role: "nix",
     url: "https://g.example/nix-pr",
+    access: "write",
     public_key: "nix-pr-1:AAAA",
   },
 ];

@@ -6,6 +6,7 @@ export interface CacheInfo {
   readonly protocol: "files" | "nix" | "hashserv";
   readonly role: string;
   readonly url: string;
+  readonly access: "write" | "read";
   readonly public_key?: string;
 }
 
@@ -62,8 +63,8 @@ export async function exchange(server: string, idToken: string): Promise<Issued>
   return body;
 }
 
-/** Lists the caches that jobs without an ID token read from. */
-export async function anonymousCaches(server: string): Promise<CacheInfo[]> {
+/** Lists the caches that anyone may read, for jobs without an ID token. */
+export async function publicCaches(server: string): Promise<CacheInfo[]> {
   const response = await fetch(new URL("_api/caches", withSlash(server)));
   if (!response.ok) {
     throw new Error(`granary refused to list its caches with ${response.status}`);
@@ -100,6 +101,7 @@ function isCacheInfo(value: unknown): value is CacheInfo {
     ["files", "nix", "hashserv"].includes(String(value["protocol"])) &&
     typeof value["role"] === "string" &&
     typeof value["url"] === "string" &&
+    ["write", "read"].includes(String(value["access"])) &&
     (value["public_key"] === undefined || typeof value["public_key"] === "string")
   );
 }

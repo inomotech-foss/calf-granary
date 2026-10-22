@@ -48,7 +48,7 @@ test("ID tokens are exchanged at /token", async () => {
         token: "granary-token",
         expires_at: 1,
         tier: "pr",
-        caches: [{ name: "sstate-pr", protocol: "files", role: "sstate", url: "u" }],
+        caches: [{ name: "sstate-pr", protocol: "files", role: "sstate", url: "u", access: "write" }],
       }),
     );
   });
