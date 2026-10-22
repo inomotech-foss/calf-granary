@@ -14,13 +14,6 @@ version.workspace = true
 async-compression = { workspace = true, features = ["tokio", "xz", "zstd"] }
 aws-lc-rs = { workspace = true, features = ["aws-lc-sys"] }
 base64 = { workspace = true, features = ["std"] }
-axum = { workspace = true, features = [
-  "http1",
-  "json",
-  "matched-path",
-  "tokio",
-  "ws",
-] }
 bytes = { workspace = true }
 calf-granary-server-db = { workspace = true, features = ["deadpool"] }
 chrono = { workspace = true, features = ["clock"] }
@@ -29,19 +22,7 @@ fastcdc = { workspace = true }
 futures = { workspace = true }
 jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
 object_store = { workspace = true, features = ["aws"] }
-opentelemetry = { workspace = true, features = [
-  "internal-logs",
-  "logs",
-  "metrics",
-  "trace",
-] }
 opentelemetry-appender-tracing = { workspace = true }
-opentelemetry_sdk = { workspace = true, features = [
-  "internal-logs",
-  "logs",
-  "metrics",
-  "trace",
-] }
 reqwest = { workspace = true, features = ["json", "rustls"] }
 rustls = { workspace = true, features = ["aws_lc_rs", "std"] }
 rustls-pki-types = { workspace = true, features = ["std"] }
@@ -57,9 +38,17 @@ tracing = { workspace = true, features = ["std"] }
 tracing-opentelemetry = { workspace = true }
 zstd = { workspace = true }
 
+[dependencies.axum]
+workspace = true
+features = ["http1", "json", "matched-path", "tokio", "ws"]
+
 [dependencies.clap]
 workspace = true
 features = ["derive", "env", "error-context", "help", "std", "usage"]
+
+[dependencies.opentelemetry]
+workspace = true
+features = ["internal-logs", "logs", "metrics", "trace"]
 
 [dependencies.opentelemetry-otlp]
 workspace = true
@@ -71,6 +60,10 @@ features = [
   "reqwest-blocking-client",
   "trace",
 ]
+
+[dependencies.opentelemetry_sdk]
+workspace = true
+features = ["internal-logs", "logs", "metrics", "trace"]
 
 [dependencies.tokio]
 workspace = true
