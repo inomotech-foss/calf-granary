@@ -335,6 +335,17 @@ async fn accepts_nix_copy_uploads() {
         )
     };
 
+    assert_eq!(
+        put_basic(
+            &server,
+            &token,
+            &format!("nix-main/{HASH}"),
+            b"squat".to_vec()
+        )
+        .await,
+        StatusCode::BAD_REQUEST,
+        "files can't take the name of a store path"
+    );
     let early = narinfo(&sri(&nar)).into_bytes();
     assert_eq!(
         put_basic(&server, &token, &format!("nix-main/{HASH}.narinfo"), early).await,

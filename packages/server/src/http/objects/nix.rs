@@ -304,7 +304,8 @@ async fn nar(state: &Objects, cache: &Cache, hash: &StorePathHash, head: bool) -
 /// Answers an upload from `nix copy` to a Nix cache.
 ///
 /// NAR files come first and narinfos after them. Other files, such as build
-/// logs, are kept as they are. The caller checked the token.
+/// logs, are kept as they are, except under the names of store paths. The
+/// caller checked the token.
 pub(super) async fn put(state: &Objects, cache: &Cache, key: &str, body: Body) -> StatusCode {
     let name = cache.name();
     let stored = if key == "nix-cache-info" {
@@ -321,6 +322,9 @@ pub(super) async fn put(state: &Objects, cache: &Cache, key: &str, body: Body) -
         }
         cache.put_narinfo(&state.pool, &info).await
     } else {
+        if StorePathHash::try_from(key).is_ok() {
+            return StatusCode::BAD_REQUEST;
+        }
         let Ok(object) = ObjectKey::try_from(key.to_owned()) else {
             return StatusCode::BAD_REQUEST;
         };
