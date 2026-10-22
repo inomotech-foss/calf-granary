@@ -1,11 +1,13 @@
 //! Postgres connections.
 
 use core::error::Error;
+use core::num::NonZeroUsize;
+use core::time::Duration;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::Args;
-use deadpool_postgres::{BuildError, Manager, Pool};
+use deadpool_postgres::{BuildError, Manager, Pool, Runtime};
 use rustls::crypto::aws_lc_rs;
 use rustls::{ClientConfig, RootCertStore};
 use rustls_pki_types::CertificateDer;
@@ -17,6 +19,9 @@ use tokio_postgres_rustls::MakeRustlsConnect;
 
 use crate::notifications;
 
+/// How long a request waits for a free connection before it fails.
+const WAIT_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Command-line arguments that locate Postgres.
 ///
 /// The `sslmode` of the URL decides whether TLS is used. With `prefer`, the
@@ -24,13 +29,24 @@ use crate::notifications;
 #[derive(Debug, Args)]
 pub(crate) struct DatabaseArgs {
     /// Postgres connection URL.
-    #[arg(long, env = "GRANARY_DATABASE_URL", hide_env_values = true)]
-    database_url: Config,
+    #[arg(
+        long = "database-url",
+        env = "GRANARY_DATABASE_URL",
+        hide_env_values = true
+    )]
+    url: Config,
     /// PEM file with the CA certificates that sign the server certificate.
     ///
     /// Without it, the system trust store is used.
-    #[arg(long, env = "GRANARY_DATABASE_CA")]
-    database_ca: Option<PathBuf>,
+    #[arg(long = "database-ca", env = "GRANARY_DATABASE_CA")]
+    ca: Option<PathBuf>,
+    /// The most connections that one process opens.
+    #[arg(
+        long = "database-connections",
+        env = "GRANARY_DATABASE_CONNECTIONS",
+        default_value = "16"
+    )]
+    connections: NonZeroUsize,
 }
 
 impl DatabaseArgs {
@@ -40,7 +56,7 @@ impl DatabaseArgs {
         let builder = ClientConfig::builder_with_provider(Arc::clone(&provider))
             .with_safe_default_protocol_versions()
             .map_err(TlsError::Config)?;
-        let config = match &self.database_ca {
+        let config = match &self.ca {
             Some(path) => {
                 let mut roots = RootCertStore::empty();
                 for certificate in
@@ -73,8 +89,9 @@ impl DatabaseArgs {
         }
         .with_no_client_auth();
         Ok(Database {
-            config: self.database_url.clone(),
+            config: self.url.clone(),
             tls: MakeRustlsConnect::new(config),
+            connections: self.connections,
         })
     }
 }
@@ -86,6 +103,8 @@ pub(crate) struct Database {
     config: Config,
     /// Negotiates TLS.
     tls: MakeRustlsConnect,
+    /// The size of the pool.
+    connections: NonZeroUsize,
 }
 
 impl Database {
@@ -102,7 +121,11 @@ impl Database {
 
     /// Creates a connection pool. Connections open on first use.
     pub(crate) fn pool(&self) -> Result<Pool, BuildError> {
-        Pool::builder(Manager::new(self.config.clone(), self.tls.clone())).build()
+        Pool::builder(Manager::new(self.config.clone(), self.tls.clone()))
+            .max_size(self.connections.get())
+            .runtime(Runtime::Tokio1)
+            .wait_timeout(Some(WAIT_TIMEOUT))
+            .build()
     }
 
     /// Listens on a channel in the background on a dedicated connection.
