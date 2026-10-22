@@ -14,7 +14,7 @@ jobs:
     needs:
       - comment-start
       - quality
-    if: ${{ always() && !cancelled() && forge.event_name == 'pull_request' }}
+    if: ${{ !cancelled() }}
     steps:
       - name: Update pull request comment
         uses: https://codeberg.org/inomotech/actions-comment-pull-request@e007c4a9d16daf06989ab390ba8c2d45632acb01
@@ -31,7 +31,7 @@ jobs:
   comment-start:
     name: Report PR review start
     runs-on: calf-normal
-    if: ${{ !cancelled() && forge.event_name == 'pull_request' }}
+    if: ${{ !cancelled() }}
     steps:
       - name: Update pull request comment
         uses: https://codeberg.org/inomotech/actions-comment-pull-request@e007c4a9d16daf06989ab390ba8c2d45632acb01

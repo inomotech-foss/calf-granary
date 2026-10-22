@@ -18,7 +18,6 @@
         ./nix/cornucopia.nix
         ./nix/dev.nix
         ./nix/integration.nix
-        ./nix/rust-packages.nix
         ./nix/typescript.nix
         ./nix/static.nix
         ./nix/chart.nix
@@ -39,9 +38,12 @@
         ];
       };
 
-      granary.ephemeris.rust.packages = {
-        calf-granary-client = { };
-        calf-granary-server = { };
-      };
+      perSystem =
+        { config, lib, ... }:
+        {
+          checks = lib.mapAttrs' (name: lib.nameValuePair "package-${name}") {
+            inherit (config.packages) calf-granary-client calf-granary-server;
+          };
+        };
     };
 }

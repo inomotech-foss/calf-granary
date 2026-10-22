@@ -43,14 +43,15 @@
         "flake-parts": "flake-parts",
         "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay",
-        "treefmt-nix": "treefmt-nix"
+        "treefmt-nix": "treefmt-nix",
+        "vale-ai-tells": "vale-ai-tells"
       },
       "locked": {
-        "lastModified": 1792506417,
-        "narHash": "sha256-r64PzAyTDRXVgslBHUscgi8nSSYKaU4kkz91sOoBnyE=",
+        "lastModified": 1792681562,
+        "narHash": "sha256-XCDrqWrhbXchLDLr/iN0CL8iCy6T/4OUdz+qFzgdFfE=",
         "ref": "refs/heads/main",
-        "rev": "6d8a46d84abd84f2fa5585afdf583575da6de426",
-        "revCount": 1054,
+        "rev": "95f4cc334e2720dff4de58a614b09c98cbed83a2",
+        "revCount": 1281,
         "type": "git",
         "url": "https://codeberg.org/inomotech/ephemeris"
       },
@@ -141,6 +142,22 @@
       "original": {
         "owner": "numtide",
         "repo": "treefmt-nix",
+        "type": "github"
+      }
+    },
+    "vale-ai-tells": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1789442525,
+        "narHash": "sha256-GwgAMjcxFqjuGqTc8OP5uvJb2jQiRhkIBxM+DQpauME=",
+        "owner": "tbhb",
+        "repo": "vale-ai-tells",
+        "rev": "dd60c5dc0d5432f71b0113fe2003fb06d069a71f",
+        "type": "github"
+      },
+      "original": {
+        "owner": "tbhb",
+        "repo": "vale-ai-tells",
         "type": "github"
       }
     }

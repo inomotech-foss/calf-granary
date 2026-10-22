@@ -29,7 +29,7 @@ jobs:
       - name: Run Renovate
         run: nix run .#ephemeris-renovate
         env:
-          LOG_LEVEL: debug
+          LOG_LEVEL: info
           RENOVATE_ALLOWED_COMMANDS: '["^nix run \\.#ephemeris -- files apply$"]'
           RENOVATE_CACHE_DIR: .renovate-cache/
           RENOVATE_CONFIG: '{"allowCustomCrateRegistries":true,"configFileNames":[".forgejo/renovate.json5"],"onboarding":false}'

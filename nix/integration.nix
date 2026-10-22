@@ -1,19 +1,30 @@
-{ lib, ... }:
+{ config, lib, ... }:
+let
+  source = config.ephemeris.internal.source;
+in
 {
   perSystem =
-    { granaryCrane, pkgs, ... }:
+    {
+      config,
+      pkgs,
+      rustCrane,
+      ...
+    }:
     let
       services = import ./services.nix { inherit lib pkgs; };
-      inherit (granaryCrane) craneLib common cargoArtifacts;
+      inherit (rustCrane.stable) craneLib shared cargoArtifacts;
+      inherit (config.ephemeris.rust.nativeInputs) nativeBuildInputs;
     in
     {
       checks.integration = craneLib.cargoNextest (
-        common
+        shared
         // {
           inherit cargoArtifacts;
+          src = source;
+          version = "0.0.0";
           pname = "calf-granary-integration";
           cargoNextestExtraArgs = "--locked --workspace --run-ignored only";
-          nativeBuildInputs = common.nativeBuildInputs ++ [
+          nativeBuildInputs = nativeBuildInputs ++ [
             pkgs.curl
             pkgs.nix
             services.postgresql
