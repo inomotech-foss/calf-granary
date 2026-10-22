@@ -1,9 +1,10 @@
 // Gets a granary token and points Nix and BitBake at the caches.
 
-import { appendFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { bitbakeConfig, netrc, nixConfig } from "./config.ts";
+import { bitbakeConfig, netrc, nixConfig, replaceBlock } from "./config.ts";
 import { anonymousCaches, exchange, type Issued, requestIdToken } from "./granary.ts";
 import { output } from "./process.ts";
 import {
@@ -51,12 +52,15 @@ async function main(): Promise<void> {
   info(`granary tier ${issued?.tier ?? "anonymous"}: ${caches.map((cache) => cache.name).join(", ")}`);
 
   const temp = process.env["RUNNER_TEMP"] ?? "/tmp";
+  let netrcFile: string | undefined;
+  if (issued !== undefined) {
+    netrcFile = join(temp, "granary.netrc");
+    writeFileSync(netrcFile, netrc([new URL(server).hostname], issued.token), { mode: 0o600 });
+    saveState("netrc", netrcFile);
+  }
   const nixCache = caches.find((cache) => cache.protocol === "nix");
   if (booleanInput("nix") && nixCache !== undefined) {
-    let netrcFile: string | undefined;
     if (issued !== undefined) {
-      netrcFile = join(temp, "granary.netrc");
-      writeFileSync(netrcFile, netrc(server, issued.token), { mode: 0o600 });
       const snapshot = join(temp, "granary-store-paths");
       writeFileSync(snapshot, await output("nix", ["path-info", "--all"]));
       saveState("store-paths", snapshot);
@@ -68,9 +72,23 @@ async function main(): Promise<void> {
 
   const bitbakeFile = input("bitbake-conf");
   if (bitbakeFile !== "") {
-    appendFileSync(bitbakeFile, bitbakeConfig(caches, issued?.token), { mode: 0o600 });
+    writeFileSync(bitbakeFile, replaceBlock(readIfExists(bitbakeFile), bitbakeConfig(caches)));
     info(`wrote the BitBake settings to ${bitbakeFile}`);
+    const hashserv = caches.filter((cache) => cache.protocol === "hashserv").map((cache) => cache.url);
+    if (issued !== undefined && hashserv.length > 0) {
+      const homeNetrc = join(homedir(), ".netrc");
+      writeFileSync(homeNetrc, replaceBlock(readIfExists(homeNetrc), netrc(hashserv, issued.token)), {
+        mode: 0o600,
+      });
+      chmodSync(homeNetrc, 0o600);
+      saveState("home-netrc", homeNetrc);
+    }
   }
+}
+
+/** Reads a file, or returns an empty string if there is none. */
+function readIfExists(file: string): string {
+  return existsSync(file) ? readFileSync(file, "utf8") : "";
 }
 
 main().catch((err: unknown) => {

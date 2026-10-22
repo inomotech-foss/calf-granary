@@ -1,7 +1,8 @@
 // Uploads what the job built.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 
+import { replaceBlock } from "./config.ts";
 import type { CacheInfo } from "./granary.ts";
 import { output, run } from "./process.ts";
 import { info, input, state, warning } from "./runner.ts";
@@ -41,6 +42,23 @@ async function post(): Promise<void> {
   }
 }
 
+/** Removes the credentials that main wrote. */
+function removeCredentials(): void {
+  const netrcFile = state("netrc");
+  if (netrcFile !== "") {
+    rmSync(netrcFile, { force: true });
+  }
+  const homeNetrc = state("home-netrc");
+  if (homeNetrc !== "") {
+    const rest = replaceBlock(readFileSync(homeNetrc, "utf8"));
+    if (rest.trim() === "") {
+      rmSync(homeNetrc, { force: true });
+    } else {
+      writeFileSync(homeNetrc, rest);
+    }
+  }
+}
+
 /** Runs an upload, warning instead of failing the job. */
 async function upload(client: string, args: string[], env: NodeJS.ProcessEnv): Promise<void> {
   try {
@@ -50,6 +68,8 @@ async function upload(client: string, args: string[], env: NodeJS.ProcessEnv): P
   }
 }
 
-post().catch((err: unknown) => {
-  warning(`calf-granary: ${err instanceof Error ? err.message : String(err)}`);
-});
+post()
+  .finally(removeCredentials)
+  .catch((err: unknown) => {
+    warning(`calf-granary: ${err instanceof Error ? err.message : String(err)}`);
+  });

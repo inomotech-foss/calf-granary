@@ -8,7 +8,7 @@ use reqwest::StatusCode;
 use tokio::process::Command;
 
 use crate::forge::{Forge, RUNNER_TOKEN};
-use crate::harness::{SERVER_BIN, Stack};
+use crate::harness::{SERVER_BIN, Server, Stack};
 
 const KEY: &str =
     "pr-1:gDQElRwG6hWQbzvWiPbOwXBTfsbJksJCSpVX/RYucmv/Qjzzg/1fQ4UimSnxIDFlz+sk9nb4Z1Ws41Rc6LhzIg==";
@@ -149,6 +149,50 @@ fn runner_env(server: &str, forge: &str, dir: &Path) -> BTreeMap<String, String>
     .collect()
 }
 
+/// Checks that post uploaded what the job built and nothing older.
+async fn assert_uploaded(server: &Server, before: &str, built: &str) {
+    let hash = |store_path: &str| {
+        store_path
+            .trim_start_matches("/nix/store/")
+            .split('-')
+            .next()
+            .unwrap()
+            .to_owned()
+    };
+    let cases = [
+        (
+            format!("sstate-pr/{SSTATE}"),
+            StatusCode::OK,
+            "sstate is uploaded",
+        ),
+        (
+            "downloads/zlib-1.3.1.tar.xz".to_owned(),
+            StatusCode::OK,
+            "downloads are uploaded",
+        ),
+        (
+            format!("nix-pr/{}.narinfo", hash(built)),
+            StatusCode::OK,
+            "new store paths are pushed",
+        ),
+        (
+            format!("nix-pr/{}.narinfo", hash(before)),
+            StatusCode::NOT_FOUND,
+            "old store paths aren't",
+        ),
+    ];
+    for (url, expected, reason) in cases {
+        let status = server
+            .http()
+            .get(server.url(&url))
+            .send()
+            .await
+            .unwrap()
+            .status();
+        assert_eq!(status, expected, "{reason}");
+    }
+}
+
 #[tokio::test]
 #[ignore = "needs Postgres, object storage, Nix and Node"]
 async fn sets_up_and_fills_caches() {
@@ -189,6 +233,18 @@ async fn sets_up_and_fills_caches() {
             "BitBake gets {setting}: {bitbake}"
         );
     }
+    assert!(
+        !bitbake.contains("PASSWORD"),
+        "the token stays out of the build directory: {bitbake}"
+    );
+    let home_netrc = fs::read_to_string(path(".netrc")).unwrap();
+    assert!(
+        home_netrc.contains(&format!(
+            "machine {}",
+            server.url("_hashserv/hash-pr").replacen("http", "ws", 1)
+        )),
+        "BitBake finds the token in netrc: {home_netrc}"
+    );
 
     let built = add_store_path(&envs, "built").await;
     fs::create_dir_all(path("sstate").join(SSTATE).parent().unwrap()).unwrap();
@@ -203,47 +259,12 @@ async fn sets_up_and_fills_caches() {
     );
     let log = step("post.ts", &envs).await;
     assert!(!log.contains("::warning::"), "uploads succeed: {log}");
+    assert!(
+        !path(".netrc").exists() && !path("runner/granary.netrc").exists(),
+        "the credentials are removed"
+    );
 
-    let hash = |store_path: &str| {
-        store_path
-            .trim_start_matches("/nix/store/")
-            .split('-')
-            .next()
-            .unwrap()
-            .to_owned()
-    };
-    let cases = [
-        (
-            format!("sstate-pr/{SSTATE}"),
-            StatusCode::OK,
-            "sstate is uploaded",
-        ),
-        (
-            "downloads/zlib-1.3.1.tar.xz".to_owned(),
-            StatusCode::OK,
-            "downloads are uploaded",
-        ),
-        (
-            format!("nix-pr/{}.narinfo", hash(&built)),
-            StatusCode::OK,
-            "new store paths are pushed",
-        ),
-        (
-            format!("nix-pr/{}.narinfo", hash(&before)),
-            StatusCode::NOT_FOUND,
-            "old store paths aren't",
-        ),
-    ];
-    for (url, expected, reason) in cases {
-        let status = server
-            .http()
-            .get(server.url(&url))
-            .send()
-            .await
-            .unwrap()
-            .status();
-        assert_eq!(status, expected, "{reason}");
-    }
+    assert_uploaded(&server, &before, &built).await;
     assert!(server.stop().await.success(), "serve stops cleanly");
 }
 

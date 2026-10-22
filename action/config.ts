@@ -2,6 +2,9 @@
 
 import type { CacheInfo } from "./granary.ts";
 
+const BLOCK_START = "# Begin calf-granary settings";
+const BLOCK_END = "# End calf-granary settings";
+
 /** The settings that make Nix substitute from a cache, with the token in
  * `netrcFile` if there is one. */
 export function nixConfig(cache: CacheInfo, netrcFile?: string): string {
@@ -15,15 +18,31 @@ export function nixConfig(cache: CacheInfo, netrcFile?: string): string {
   return `${lines.join("\n")}\n`;
 }
 
-/** A netrc file that sends the token to the server. */
-export function netrc(server: string, token: string): string {
-  return `machine ${new URL(server).hostname}\nlogin granary\npassword ${token}\n`;
+/** Netrc entries that send the token to each machine. */
+export function netrc(machines: readonly string[], token: string): string {
+  return machines.map((machine) => `machine ${machine}\nlogin granary\npassword ${token}\n`).join("");
 }
 
-/** BitBake settings for the caches, reporting hash equivalence only with a
- * token. */
-export function bitbakeConfig(caches: readonly CacheInfo[], token?: string): string {
-  const lines = ["# Written by the calf-granary action."];
+/** Replaces the action's block in a configuration file's text, or removes it
+ * without `block`. Both BitBake and netrc files take `#` comments. */
+export function replaceBlock(text: string, block?: string): string {
+  const start = text.indexOf(BLOCK_START);
+  const end = text.indexOf(BLOCK_END, start);
+  const rest =
+    start === -1 || end === -1
+      ? text
+      : text.slice(0, start) + text.slice(end + BLOCK_END.length).replace(/^\n/, "");
+  if (block === undefined) {
+    return rest;
+  }
+  const separator = rest === "" || rest.endsWith("\n") ? "" : "\n";
+  return `${rest}${separator}${BLOCK_START}\n${block}${BLOCK_END}\n`;
+}
+
+/** BitBake settings for the caches. Hash equivalence credentials come from
+ * netrc, so they stay out of the build directory and the parse cache. */
+export function bitbakeConfig(caches: readonly CacheInfo[]): string {
+  const lines: string[] = [];
   const sstate = caches.find((cache) => cache.protocol === "files" && cache.role === "sstate");
   if (sstate !== undefined) {
     lines.push(`SSTATE_MIRRORS ?= "file://.* ${sstate.url}/PATH;downloadfilename=PATH"`);
@@ -40,9 +59,6 @@ export function bitbakeConfig(caches: readonly CacheInfo[], token?: string): str
   const hashserv = caches.find((cache) => cache.protocol === "hashserv");
   if (hashserv !== undefined) {
     lines.push(`BB_SIGNATURE_HANDLER = "OEEquivHash"`, `BB_HASHSERVE = "${hashserv.url}"`);
-    if (token !== undefined) {
-      lines.push(`BB_HASHSERVE_USERNAME = "granary"`, `BB_HASHSERVE_PASSWORD = "${token}"`);
-    }
   }
   return `${lines.join("\n")}\n`;
 }

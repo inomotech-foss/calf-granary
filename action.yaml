@@ -11,7 +11,7 @@ inputs:
     description: Whether to substitute from and push to the Nix cache
     default: "true"
   bitbake-conf:
-    description: A BitBake configuration file to append the cache settings to, such as build/conf/auto.conf
+    description: A BitBake configuration file to add the cache settings to, such as build/conf/auto.conf
     default: ""
   sstate-dir:
     description: The SSTATE_DIR to upload new sstate files from after the job
