@@ -108,7 +108,7 @@ enum Request<'a> {
 }
 
 impl Request<'_> {
-    /// Whether the command reads the cache.
+    /// Whether the command needs `@read`, as upstream.
     const fn reads(&self) -> bool {
         matches!(
             self,
@@ -117,6 +117,8 @@ impl Request<'_> {
                 | Self::GetStream(_)
                 | Self::ExistsStream(_)
                 | Self::Report(_)
+                | Self::GetStats(_)
+                | Self::BackfillWait(_)
         )
     }
 
