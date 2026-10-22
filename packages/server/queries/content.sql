@@ -111,7 +111,23 @@ WHERE id = any(:ids::bigint[])
 --! known_objects
 SELECT object_key
 FROM chunk
+WHERE store = :store::text AND object_key = any(:keys::text[])
+UNION ALL
+SELECT object_key
+FROM retired_object
 WHERE store = :store::text AND object_key = any(:keys::text[]);
+
+--! retired_objects
+SELECT id, store, object_key
+FROM retired_object
+WHERE id > :after::bigint
+    AND retired_at < now() - make_interval(secs => :grace_seconds::float8)
+ORDER BY id
+LIMIT :limit::bigint;
+
+--! forget_retired_objects
+DELETE FROM retired_object
+WHERE id = any(:ids::bigint[]);
 
 --! zstd_size : (size?)
 SELECT blob_zstd_size(:blob_id::bigint) AS size;
@@ -154,9 +170,15 @@ WHERE chunk.state = 'valid' AND chunk.store != wanted.store
 ORDER BY chunk.id;
 
 --! move_chunk
-UPDATE chunk
-SET store = :target::text, object_key = :new_key::text
-WHERE id = :id::bigint
-    AND state = 'valid'
-    AND store = :store::text
-    AND object_key = :old_key::text;
+WITH moved AS (
+    UPDATE chunk
+    SET store = :target::text, object_key = :new_key::text
+    WHERE id = :id::bigint
+        AND state = 'valid'
+        AND store = :store::text
+        AND object_key = :old_key::text
+    RETURNING id
+)
+INSERT INTO retired_object (store, object_key)
+SELECT :store::text, :old_key::text
+FROM moved;

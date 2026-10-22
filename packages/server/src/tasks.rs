@@ -147,6 +147,7 @@ impl Runner {
             deleted_chunks,
             freed_bytes,
             swept_objects,
+            retired_objects,
         } = stats;
         record_prune_collection()
             .bind(
@@ -156,6 +157,7 @@ impl Runner {
                 &count(deleted_chunks),
                 &count(freed_bytes),
                 &count(swept_objects),
+                &count(retired_objects),
             )
             .await?;
         tracing::info!(
@@ -163,6 +165,7 @@ impl Runner {
             deleted_chunks,
             freed_bytes,
             swept_objects,
+            retired_objects,
             "collected unreferenced content"
         );
         self.record_store_sizes(&client).await

@@ -59,6 +59,7 @@ CREATE TABLE prune_collection (
     deleted_chunks row_count NOT NULL,
     freed_bytes byte_count NOT NULL,
     swept_objects row_count NOT NULL,
+    retired_objects row_count NOT NULL,
     finished_at timestamptz NOT NULL DEFAULT now()
 );
 

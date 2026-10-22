@@ -45,8 +45,8 @@ impl Content {
     /// Moves every chunk to the store of the longest-lived cache that uses
     /// it.
     ///
-    /// The old objects stay until collection sweeps them, so reads that
-    /// started before a move still find them.
+    /// The old objects are retired. Collection deletes them after the grace
+    /// period, so reads that started before a move still find them.
     pub(crate) async fn tier(
         &self,
         pool: &Pool,

@@ -13,6 +13,7 @@ pub struct RecordPruneCollectionParams {
     pub deleted_chunks: i64,
     pub freed_bytes: i64,
     pub swept_objects: i64,
+    pub retired_objects: i64,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct RecordTierRunParams {
@@ -75,11 +76,12 @@ impl<'a, C: GenericClient + Send + Sync, T1: crate::StringSql>
 pub struct RecordPruneCollectionStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn record_prune_collection() -> RecordPruneCollectionStmt {
     RecordPruneCollectionStmt(
-        "INSERT INTO prune_collection (task_id, deleted_blobs, deleted_chunks, freed_bytes, \
-         swept_objects) VALUES ( $1::bigint, $2::bigint, $3::bigint, $4::bigint, $5::bigint ) ON \
-         CONFLICT (task_id) DO UPDATE SET deleted_blobs = excluded.deleted_blobs, deleted_chunks \
-         = excluded.deleted_chunks, freed_bytes = excluded.freed_bytes, swept_objects = \
-         excluded.swept_objects, finished_at = now()",
+        "INSERT INTO prune_collection ( task_id, deleted_blobs, deleted_chunks, freed_bytes, \
+         swept_objects, retired_objects ) VALUES ( $1::bigint, $2::bigint, $3::bigint, \
+         $4::bigint, $5::bigint, $6::bigint ) ON CONFLICT (task_id) DO UPDATE SET deleted_blobs = \
+         excluded.deleted_blobs, deleted_chunks = excluded.deleted_chunks, freed_bytes = \
+         excluded.freed_bytes, swept_objects = excluded.swept_objects, retired_objects = \
+         excluded.retired_objects, finished_at = now()",
         None,
     )
 }
@@ -99,6 +101,7 @@ impl RecordPruneCollectionStmt {
         deleted_chunks: &'a i64,
         freed_bytes: &'a i64,
         swept_objects: &'a i64,
+        retired_objects: &'a i64,
     ) -> Result<u64, tokio_postgres::Error> {
         client
             .execute(
@@ -109,6 +112,7 @@ impl RecordPruneCollectionStmt {
                     deleted_chunks,
                     freed_bytes,
                     swept_objects,
+                    retired_objects,
                 ],
             )
             .await
@@ -140,6 +144,7 @@ impl<'a, C: GenericClient + Send + Sync>
             &params.deleted_chunks,
             &params.freed_bytes,
             &params.swept_objects,
+            &params.retired_objects,
         ))
     }
 }

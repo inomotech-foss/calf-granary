@@ -5,7 +5,8 @@ use core::future;
 use std::collections::HashSet;
 
 use calf_granary_server_db::queries::content::{
-    delete_chunks, delete_orphan_blobs, deleting_chunks, known_objects, mark_orphan_chunks,
+    delete_chunks, delete_orphan_blobs, deleting_chunks, forget_retired_objects, known_objects,
+    mark_orphan_chunks, retired_objects,
 };
 use chrono::{DateTime, TimeDelta, Utc};
 use deadpool_postgres::Client;
@@ -33,6 +34,8 @@ pub(crate) struct CollectStats {
     pub(crate) freed_bytes: u64,
     /// Objects without chunks, left behind by failed uploads.
     pub(crate) swept_objects: u64,
+    /// Old objects of chunks that tiering moved.
+    pub(crate) retired_objects: u64,
 }
 
 impl Content {
@@ -90,6 +93,8 @@ impl Content {
             }
         }
 
+        stats.retired_objects = self.delete_retired(client, grace_seconds).await?;
+
         let cutoff = TimeDelta::from_std(self.grace)
             .ok()
             .and_then(|grace| now.checked_sub_signed(grace))
@@ -99,6 +104,54 @@ impl Content {
             stats.swept_objects = stats.swept_objects.saturating_add(swept);
         }
         Ok(stats)
+    }
+
+    /// Deletes the objects that tiering retired before the grace period and
+    /// returns how many.
+    async fn delete_retired(
+        &self,
+        client: &Client,
+        grace_seconds: f64,
+    ) -> Result<u64, CollectError> {
+        let mut retired = 0u64;
+        let mut after = 0i64;
+        let limit = i64::try_from(BATCH_SIZE).unwrap_or(i64::MAX);
+        loop {
+            let batch = retired_objects()
+                .bind(client, &after, &grace_seconds, &limit)
+                .all()
+                .await?;
+            let Some(last) = batch.last() else {
+                return Ok(retired);
+            };
+            after = last.id;
+            let deleted: Vec<i64> = stream::iter(batch)
+                .map(async |object| {
+                    let store = self.stores.get(&object.store)?;
+                    match store.delete(&Path::from(object.object_key.as_str())).await {
+                        Ok(()) | Err(object_store::Error::NotFound { path: _, source: _ }) => {
+                            Some(object.id)
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                error = &err as &dyn Error,
+                                key = object.object_key,
+                                "failed to delete a retired object"
+                            );
+                            None
+                        }
+                    }
+                })
+                .buffer_unordered(DELETE_CONCURRENCY)
+                .filter_map(future::ready)
+                .collect()
+                .await;
+            retired = retired.saturating_add(
+                forget_retired_objects()
+                    .bind(client, &deleted.as_slice())
+                    .await?,
+            );
+        }
     }
 }
 

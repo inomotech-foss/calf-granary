@@ -63,6 +63,12 @@ pub struct KnownObjectsParams<
     pub store: T1,
     pub keys: T3,
 }
+#[derive(Clone, Copy, Debug)]
+pub struct RetiredObjectsParams {
+    pub after: i64,
+    pub grace_seconds: f64,
+    pub limit: i64,
+}
 #[derive(Debug)]
 pub struct MissingEntriesParams<
     T1: crate::StringSql,
@@ -197,6 +203,32 @@ impl<'a> From<DeletingChunksBorrowed<'a>> for DeletingChunks {
             store: store.into(),
             object_key: object_key.into(),
             stored_size,
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetiredObjects {
+    pub id: i64,
+    pub store: String,
+    pub object_key: String,
+}
+pub struct RetiredObjectsBorrowed<'a> {
+    pub id: i64,
+    pub store: &'a str,
+    pub object_key: &'a str,
+}
+impl<'a> From<RetiredObjectsBorrowed<'a>> for RetiredObjects {
+    fn from(
+        RetiredObjectsBorrowed {
+            id,
+            store,
+            object_key,
+        }: RetiredObjectsBorrowed<'a>,
+    ) -> Self {
+        Self {
+            id,
+            store: store.into(),
+            object_key: object_key.into(),
         }
     }
 }
@@ -800,6 +832,73 @@ where
 {
     pub fn map<R>(self, mapper: fn(&str) -> R) -> StringQuery<'c, 'a, 's, C, R, N> {
         StringQuery {
+            client: self.client,
+            params: self.params,
+            query: self.query,
+            cached: self.cached,
+            extractor: self.extractor,
+            mapper,
+        }
+    }
+    pub async fn one(self) -> Result<T, tokio_postgres::Error> {
+        let row =
+            crate::client::async_::one(self.client, self.query, &self.params, self.cached).await?;
+        Ok((self.mapper)((self.extractor)(&row)?))
+    }
+    pub async fn all(self) -> Result<Vec<T>, tokio_postgres::Error> {
+        self.iter().await?.try_collect().await
+    }
+    pub async fn opt(self) -> Result<Option<T>, tokio_postgres::Error> {
+        let opt_row =
+            crate::client::async_::opt(self.client, self.query, &self.params, self.cached).await?;
+        Ok(opt_row
+            .map(|row| {
+                let extracted = (self.extractor)(&row)?;
+                Ok((self.mapper)(extracted))
+            })
+            .transpose()?)
+    }
+    pub async fn iter(
+        self,
+    ) -> Result<
+        impl futures::Stream<Item = Result<T, tokio_postgres::Error>> + 'c,
+        tokio_postgres::Error,
+    > {
+        let stream = crate::client::async_::raw(
+            self.client,
+            self.query,
+            crate::slice_iter(&self.params),
+            self.cached,
+        )
+        .await?;
+        let mapped = stream
+            .map(move |res| {
+                res.and_then(|row| {
+                    let extracted = (self.extractor)(&row)?;
+                    Ok((self.mapper)(extracted))
+                })
+            })
+            .into_stream();
+        Ok(mapped)
+    }
+}
+pub struct RetiredObjectsQuery<'c, 'a, 's, C: GenericClient, T, const N: usize> {
+    client: &'c C,
+    params: [&'a (dyn postgres_types::ToSql + Sync); N],
+    query: &'static str,
+    cached: Option<&'s tokio_postgres::Statement>,
+    extractor: fn(&tokio_postgres::Row) -> Result<RetiredObjectsBorrowed, tokio_postgres::Error>,
+    mapper: fn(RetiredObjectsBorrowed) -> T,
+}
+impl<'c, 'a, 's, C, T: 'c, const N: usize> RetiredObjectsQuery<'c, 'a, 's, C, T, N>
+where
+    C: GenericClient,
+{
+    pub fn map<R>(
+        self,
+        mapper: fn(RetiredObjectsBorrowed) -> R,
+    ) -> RetiredObjectsQuery<'c, 'a, 's, C, R, N> {
+        RetiredObjectsQuery {
             client: self.client,
             params: self.params,
             query: self.query,
@@ -1741,7 +1840,9 @@ impl DeleteChunksStmt {
 pub struct KnownObjectsStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn known_objects() -> KnownObjectsStmt {
     KnownObjectsStmt(
-        "SELECT object_key FROM chunk WHERE store = $1::text AND object_key = any($2::text[])",
+        "SELECT object_key FROM chunk WHERE store = $1::text AND object_key = any($2::text[]) \
+         UNION ALL SELECT object_key FROM retired_object WHERE store = $1::text AND object_key = \
+         any($2::text[])",
         None,
     )
 }
@@ -1801,6 +1902,88 @@ impl<
         params: &'a KnownObjectsParams<T1, T2, T3>,
     ) -> StringQuery<'c, 'a, 's, C, String, 2> {
         self.bind(client, &params.store, &params.keys)
+    }
+}
+pub struct RetiredObjectsStmt(&'static str, Option<tokio_postgres::Statement>);
+pub fn retired_objects() -> RetiredObjectsStmt {
+    RetiredObjectsStmt(
+        "SELECT id, store, object_key FROM retired_object WHERE id > $1::bigint AND retired_at < \
+         now() - make_interval(secs => $2::float8) ORDER BY id LIMIT $3::bigint",
+        None,
+    )
+}
+impl RetiredObjectsStmt {
+    pub async fn prepare<'a, C: GenericClient>(
+        mut self,
+        client: &'a C,
+    ) -> Result<Self, tokio_postgres::Error> {
+        self.1 = Some(client.prepare(self.0).await?);
+        Ok(self)
+    }
+    pub fn bind<'c, 'a, 's, C: GenericClient>(
+        &'s self,
+        client: &'c C,
+        after: &'a i64,
+        grace_seconds: &'a f64,
+        limit: &'a i64,
+    ) -> RetiredObjectsQuery<'c, 'a, 's, C, RetiredObjects, 3> {
+        RetiredObjectsQuery {
+            client,
+            params: [after, grace_seconds, limit],
+            query: self.0,
+            cached: self.1.as_ref(),
+            extractor: |
+                row: &tokio_postgres::Row,
+            | -> Result<RetiredObjectsBorrowed, tokio_postgres::Error> {
+                Ok(RetiredObjectsBorrowed {
+                    id: row.try_get(0)?,
+                    store: row.try_get(1)?,
+                    object_key: row.try_get(2)?,
+                })
+            },
+            mapper: |it| RetiredObjects::from(it),
+        }
+    }
+}
+impl<'c, 'a, 's, C: GenericClient>
+    crate::client::async_::Params<
+        'c,
+        'a,
+        's,
+        RetiredObjectsParams,
+        RetiredObjectsQuery<'c, 'a, 's, C, RetiredObjects, 3>,
+        C,
+    > for RetiredObjectsStmt
+{
+    fn params(
+        &'s self,
+        client: &'c C,
+        params: &'a RetiredObjectsParams,
+    ) -> RetiredObjectsQuery<'c, 'a, 's, C, RetiredObjects, 3> {
+        self.bind(client, &params.after, &params.grace_seconds, &params.limit)
+    }
+}
+pub struct ForgetRetiredObjectsStmt(&'static str, Option<tokio_postgres::Statement>);
+pub fn forget_retired_objects() -> ForgetRetiredObjectsStmt {
+    ForgetRetiredObjectsStmt(
+        "DELETE FROM retired_object WHERE id = any($1::bigint[])",
+        None,
+    )
+}
+impl ForgetRetiredObjectsStmt {
+    pub async fn prepare<'a, C: GenericClient>(
+        mut self,
+        client: &'a C,
+    ) -> Result<Self, tokio_postgres::Error> {
+        self.1 = Some(client.prepare(self.0).await?);
+        Ok(self)
+    }
+    pub async fn bind<'c, 'a, 's, C: GenericClient, T1: crate::ArraySql<Item = i64>>(
+        &'s self,
+        client: &'c C,
+        ids: &'a T1,
+    ) -> Result<u64, tokio_postgres::Error> {
+        client.execute(self.0, &[ids]).await
     }
 }
 pub struct ZstdSizeStmt(&'static str, Option<tokio_postgres::Statement>);
@@ -2061,8 +2244,9 @@ impl<
 pub struct MoveChunkStmt(&'static str, Option<tokio_postgres::Statement>);
 pub fn move_chunk() -> MoveChunkStmt {
     MoveChunkStmt(
-        "UPDATE chunk SET store = $1::text, object_key = $2::text WHERE id = $3::bigint AND state \
-         = 'valid' AND store = $4::text AND object_key = $5::text",
+        "WITH moved AS ( UPDATE chunk SET store = $1::text, object_key = $2::text WHERE id = \
+         $3::bigint AND state = 'valid' AND store = $4::text AND object_key = $5::text RETURNING \
+         id ) INSERT INTO retired_object (store, object_key) SELECT $4::text, $5::text FROM moved",
         None,
     )
 }

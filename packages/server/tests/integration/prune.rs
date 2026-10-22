@@ -223,10 +223,13 @@ fallback = "main"
     time::sleep(Duration::from_secs(2)).await;
     let pruned = stack.run(&["prune"]).await;
     assert!(pruned.status.success(), "prune failed: {}", text(&pruned));
-    let swept: i64 = database
-        .query_one("SELECT swept_objects FROM prune_collection", &[])
+    let retired: i64 = database
+        .query_one("SELECT retired_objects FROM prune_collection", &[])
         .await
         .unwrap()
         .get(0);
-    assert!(swept >= 1, "the old object is swept");
+    assert_eq!(
+        retired, 1,
+        "the old object is deleted after the grace period"
+    );
 }
