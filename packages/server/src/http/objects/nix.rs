@@ -11,8 +11,8 @@ use axum::extract::{Path, State};
 use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse as _, Response};
-use bytes::Bytes;
-use futures::TryStreamExt as _;
+use bytes::{Bytes, BytesMut};
+use futures::{Stream, StreamExt as _, TryStreamExt as _, stream};
 use serde::{Deserialize, Serialize};
 use tokio_util::io::{ReaderStream, StreamReader};
 
@@ -23,10 +23,8 @@ use crate::cache::{Cache, NarCompression, NixCache, NixPutError, ObjectKey, Prot
 use crate::content::{Encoding, WriteError};
 use crate::nix::{NarInfo, PathInfo, StorePath, StorePathHash, UploadedNarInfo, parse_sha256};
 
-/// The header that carries the metadata of an uploaded NAR as JSON.
-const NAR_INFO_HEADER: &str = "x-granary-nar-info";
-
-/// The largest narinfo that `nix copy` may upload.
+/// The largest narinfo that `nix copy` may upload, and the largest metadata
+/// of an upload.
 const MAX_NARINFO_SIZE: usize = 1024 * 1024;
 
 /// The usual size of a rendered narinfo, which most fit in.
@@ -56,6 +54,32 @@ struct UploadInfo {
 }
 
 impl UploadInfo {
+    /// Reads the metadata line at the start of an upload body.
+    ///
+    /// Returns the metadata and the bytes after the line, which start the
+    /// NAR.
+    async fn read<S>(body: &mut S) -> Option<(Self, Bytes)>
+    where
+        S: Stream<Item = Result<Bytes, axum::Error>> + Unpin,
+    {
+        let mut buffer = BytesMut::new();
+        loop {
+            let chunk = body.try_next().await.ok()??;
+            let start = buffer.len();
+            buffer.extend_from_slice(&chunk);
+            let newline = buffer.get(start..)?.iter().position(|byte| *byte == b'\n');
+            if let Some(newline) = newline {
+                let line = buffer.split_to(start.saturating_add(newline).saturating_add(1));
+                let info =
+                    serde_json::from_slice(line.get(..line.len().saturating_sub(1))?).ok()?;
+                return Some((info, buffer.freeze()));
+            }
+            if buffer.len() > MAX_NARINFO_SIZE {
+                return None;
+            }
+        }
+    }
+
     /// Validates the metadata.
     fn into_path_info(self) -> Option<PathInfo> {
         let parse = |path: String| StorePath::try_from(path).ok();
@@ -377,7 +401,7 @@ pub(super) async fn put(state: &Objects, cache: &Cache, key: &str, body: Body) -
 
 /// Stores a store path from its uncompressed NAR.
 ///
-/// The metadata is JSON in the `X-Granary-Nar-Info` header. Answers `201
+/// The body is the metadata as one line of JSON, then the NAR. Answers `201
 /// Created` for new paths and `204 No Content` for existing ones.
 pub(super) async fn upload(
     State(state): State<Objects>,
@@ -395,16 +419,17 @@ pub(super) async fn upload(
     if !matches!(found.protocol(), Protocol::Nix(_)) {
         return StatusCode::NOT_FOUND;
     }
-    let info = headers
-        .get(NAR_INFO_HEADER)
-        .and_then(|value| serde_json::from_slice::<UploadInfo>(value.as_bytes()).ok())
-        .and_then(UploadInfo::into_path_info);
-    let Some(info) = info else {
+    let mut body = body.into_data_stream();
+    let Some((info, start)) = UploadInfo::read(&mut body).await else {
+        return StatusCode::BAD_REQUEST;
+    };
+    let Some(info) = info.into_path_info() else {
         return StatusCode::BAD_REQUEST;
     };
     let path = &info.store_path;
+    let nar = stream::iter([Ok(start)]).chain(body);
     match found
-        .put_nix_path(&state.content, &state.pool, &info, body.into_data_stream())
+        .put_nix_path(&state.content, &state.pool, &info, nar)
         .await
     {
         Ok(Stored::New { size }) => {

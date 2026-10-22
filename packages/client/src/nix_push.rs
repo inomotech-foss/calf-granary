@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeSet, HashSet};
 
+use bytes::Bytes;
 use clap::Args;
 use futures::{StreamExt as _, TryStreamExt as _, stream};
 use reqwest::{Body, Client, StatusCode};
@@ -11,9 +12,6 @@ use url::Url;
 
 use crate::nix::{self, Closure, NixError, PathInfo, Systems};
 use crate::target::Target;
-
-/// The header that carries the metadata of an uploaded NAR.
-const NAR_INFO_HEADER: &str = "x-granary-nar-info";
 
 /// How many store paths one missing-paths request asks about.
 const MISSING_BATCH: usize = 1000;
@@ -144,15 +142,16 @@ impl Uploader<'_> {
             nar_hash: &info.nar_hash,
             nar_size: info.nar_size,
         };
-        let metadata = serde_json::to_string(&metadata).map_err(PushError::Metadata)?;
+        let mut line = serde_json::to_vec(&metadata).map_err(PushError::Metadata)?;
+        line.push(b'\n');
         let mut dump = nix::dump(path)?;
         let stdout = dump.stdout.take().ok_or(PushError::Dump)?;
+        let body = stream::iter([Ok(Bytes::from(line))]).chain(ReaderStream::new(stdout));
         let response = self
             .http
             .put(self.url.clone())
             .bearer_auth(self.token)
-            .header(NAR_INFO_HEADER, metadata)
-            .body(Body::wrap_stream(ReaderStream::new(stdout)))
+            .body(Body::wrap_stream(body))
             .send()
             .await
             .map_err(|source| PushError::Upload {

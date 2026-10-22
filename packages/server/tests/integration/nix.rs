@@ -69,8 +69,7 @@ async fn upload(server: &Server, token: Option<&str>, info: &Value, nar: Vec<u8>
     let mut request = server
         .http()
         .put(server.url("_api/nix/nix-main/upload"))
-        .header("x-granary-nar-info", info.to_string())
-        .body(nar);
+        .body([format!("{info}\n").into_bytes(), nar].concat());
     if let Some(token) = token {
         request = request.header(AUTHORIZATION, format!("Bearer {token}"));
     }
