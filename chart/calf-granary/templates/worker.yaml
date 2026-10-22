@@ -20,6 +20,8 @@ spec:
     spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        {{- include "granary.migrate" . | nindent 8 }}
       containers:
         - name: worker
           image: {{ include "granary.image" . }}

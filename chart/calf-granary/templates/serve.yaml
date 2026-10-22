@@ -21,16 +21,7 @@ spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       initContainers:
-        - name: migrate
-          image: {{ include "granary.image" . }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          args: ["migrate"]
-          env:
-            {{- include "granary.env" . | nindent 12 }}
-          securityContext:
-            {{- toYaml .Values.securityContext | nindent 12 }}
-          volumeMounts:
-            {{- include "granary.volumeMounts" . | nindent 12 }}
+        {{- include "granary.migrate" . | nindent 8 }}
       containers:
         - name: serve
           image: {{ include "granary.image" . }}
@@ -48,6 +39,10 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ .Values.serve.drainSeconds }}
           livenessProbe:
             httpGet:
               path: /healthz

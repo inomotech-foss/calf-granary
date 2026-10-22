@@ -28,3 +28,5 @@ route:
   parentRefs:
     - name: gateway
       namespace: gateway
+  timeouts:
+    request: 0s

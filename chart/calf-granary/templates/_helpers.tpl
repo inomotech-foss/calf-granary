@@ -27,8 +27,10 @@ app.kubernetes.io/component: {{ .component }}
     secretKeyRef:
       name: {{ required "database.secretName is required" .Values.database.secretName }}
       key: {{ .Values.database.urlKey }}
+{{- with .Values.database.caKey }}
 - name: GRANARY_DATABASE_CA
-  value: /etc/granary/database/{{ .Values.database.caKey }}
+  value: /etc/granary/database/{{ . }}
+{{- end }}
 - name: HOSTNAME
   valueFrom:
     fieldRef:
@@ -46,6 +48,19 @@ app.kubernetes.io/component: {{ .component }}
 {{- end }}
 {{- end -}}
 
+{{- define "granary.migrate" -}}
+- name: migrate
+  image: {{ include "granary.image" . }}
+  imagePullPolicy: {{ .Values.image.pullPolicy }}
+  args: ["migrate"]
+  env:
+    {{- include "granary.env" . | nindent 4 }}
+  securityContext:
+    {{- toYaml .Values.securityContext | nindent 4 }}
+  volumeMounts:
+    {{- include "granary.volumeMounts" . | nindent 4 }}
+{{- end -}}
+
 {{- define "granary.envFrom" -}}
 - secretRef:
     name: {{ required "storage.secretName is required" .Values.storage.secretName }}
@@ -56,9 +71,11 @@ app.kubernetes.io/component: {{ .component }}
   mountPath: /etc/granary/config.toml
   subPath: config.toml
   readOnly: true
+{{- if .Values.database.caKey }}
 - name: database
   mountPath: /etc/granary/database
   readOnly: true
+{{- end }}
 {{- if .Values.signingKeys.secretName }}
 - name: signing-keys
   mountPath: /etc/granary/keys
@@ -70,12 +87,14 @@ app.kubernetes.io/component: {{ .component }}
 - name: config
   configMap:
     name: {{ include "granary.name" . }}
+{{- with .Values.database.caKey }}
 - name: database
   secret:
-    secretName: {{ .Values.database.secretName }}
+    secretName: {{ $.Values.database.secretName }}
     items:
-      - key: {{ .Values.database.caKey }}
-        path: {{ .Values.database.caKey }}
+      - key: {{ . }}
+        path: {{ . }}
+{{- end }}
 {{- with .Values.signingKeys.secretName }}
 - name: signing-keys
   secret:

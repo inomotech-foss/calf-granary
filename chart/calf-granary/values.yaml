@@ -22,6 +22,7 @@ otel:
 extraEnv: []
 serve:
   replicas: 2
+  drainSeconds: 5
   resources:
     requests:
       cpu: 100m
@@ -41,6 +42,7 @@ route:
   enabled: false
   hostnames: []
   parentRefs: []
+  timeouts: {}
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 65534
