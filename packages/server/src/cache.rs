@@ -246,6 +246,8 @@ pub(crate) struct Cache {
     role: Option<String>,
     /// The cache to read from when an entry is missing.
     fallback: Option<Arc<Self>>,
+    /// Whether anyone may read the cache without a token.
+    public: bool,
 }
 
 impl Cache {
@@ -267,7 +269,19 @@ impl Cache {
             protocol,
             role,
             fallback,
+            public: false,
         }
+    }
+
+    /// Lets anyone read the cache without a token.
+    pub(crate) const fn with_public_reads(mut self) -> Self {
+        self.public = true;
+        self
+    }
+
+    /// Whether anyone may read the cache without a token.
+    pub(crate) const fn is_public(&self) -> bool {
+        self.public
     }
 
     /// The name.

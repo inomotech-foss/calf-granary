@@ -18,7 +18,6 @@ use deadpool_postgres::Pool;
 
 use self::observe::RequestMetrics;
 pub(crate) use self::server::serve;
-pub(crate) use self::token::CacheDirectory;
 use crate::access::AccessLog;
 use crate::cache::Caches;
 use crate::content::Content;
@@ -35,7 +34,7 @@ pub(crate) fn router(
     access: Arc<AccessLog>,
     key: TokenKey,
     exchange: Arc<Exchange>,
-    directory: CacheDirectory,
+    public_url: Option<String>,
 ) -> Router {
     let observed = Router::new()
         .merge(objects::router(
@@ -45,7 +44,7 @@ pub(crate) fn router(
             access,
             key,
         ))
-        .merge(token::router(exchange, caches, directory))
+        .merge(token::router(exchange, caches, public_url))
         .route_layer(middleware::from_fn_with_state(
             RequestMetrics::new(),
             observe::observe,

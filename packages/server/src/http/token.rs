@@ -13,7 +13,7 @@ use axum::{Json, Router};
 use serde::Serialize;
 
 use super::bearer;
-use crate::cache::{Cache, CacheName, Caches, Protocol};
+use crate::cache::{Cache, Caches, Protocol};
 use crate::exchange::{Exchange, ExchangeError};
 use crate::oidc::VerifyError;
 
@@ -51,16 +51,6 @@ impl Tokens {
     }
 }
 
-/// Builds the router for the token exchange.
-/// What clients learn about the caches besides their grants.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct CacheDirectory {
-    /// The URL that clients reach the server at, if configured.
-    pub(crate) public_url: Option<String>,
-    /// The caches that jobs without an ID token read from.
-    pub(crate) anonymous: Vec<CacheName>,
-}
-
 /// Shared state of the token route.
 #[derive(Clone, Debug)]
 struct Tokens {
@@ -70,8 +60,6 @@ struct Tokens {
     caches: Arc<Caches>,
     /// The URL that clients reach the server at, if configured.
     public_url: Option<Arc<str>>,
-    /// The caches that jobs without an ID token read from.
-    anonymous: Arc<[CacheName]>,
 }
 
 /// A granary token and the caches it grants.
@@ -83,13 +71,13 @@ struct TokenResponse<'a> {
     expires_at: u64,
     /// The tier that the ID token mapped to.
     tier: String,
-    /// The caches that the token may write to and read through.
+    /// The caches that the token may write to or read.
     caches: Vec<CacheInfo<'a>>,
 }
 
-/// The caches that jobs without an ID token read from.
+/// The caches that anyone may read.
 #[derive(Debug, Serialize)]
-struct AnonymousResponse<'a> {
+struct PublicResponse<'a> {
     /// The caches.
     caches: Vec<CacheInfo<'a>>,
 }
@@ -105,6 +93,8 @@ struct CacheInfo<'a> {
     role: &'a str,
     /// The URL that clients use.
     url: String,
+    /// `write` if the token may write to the cache, else `read`.
+    access: &'static str,
     /// The public key of a Nix cache, for `trusted-public-keys`.
     #[serde(skip_serializing_if = "Option::is_none")]
     public_key: Option<&'a str>,
@@ -114,29 +104,28 @@ struct CacheInfo<'a> {
 pub(super) fn router(
     exchange: Arc<Exchange>,
     caches: Arc<Caches>,
-    directory: CacheDirectory,
+    public_url: Option<String>,
 ) -> Router {
     Router::new()
         .route("/token", post(issue))
-        .route("/_api/caches", get(anonymous_caches))
+        .route("/_api/caches", get(public_caches))
         .with_state(Tokens {
             exchange,
             caches,
-            public_url: directory.public_url.map(Into::into),
-            anonymous: directory.anonymous.into(),
+            public_url: public_url.map(Into::into),
         })
 }
 
-/// Describes the caches that jobs without an ID token read from.
-async fn anonymous_caches(State(state): State<Tokens>, headers: HeaderMap) -> Response {
+/// Describes the caches that anyone may read, for jobs without an ID token.
+async fn public_caches(State(state): State<Tokens>, headers: HeaderMap) -> Response {
     let base = state.base_url(&headers);
     let caches = state
-        .anonymous
+        .caches
         .iter()
-        .filter_map(|name| state.caches.get(name.as_ref()))
-        .map(|cache| describe(cache, &base))
+        .filter(|(_, cache)| cache.is_public())
+        .map(|(_, cache)| describe(cache, &base, false))
         .collect();
-    Json(AnonymousResponse { caches }).into_response()
+    Json(PublicResponse { caches }).into_response()
 }
 
 /// Exchanges the ID token in the `Authorization` header.
@@ -148,10 +137,10 @@ async fn issue(State(state): State<Tokens>, headers: HeaderMap) -> Response {
         Ok(issued) => {
             let base = state.base_url(&headers);
             let caches = issued
-                .caches
-                .iter()
-                .filter_map(|name| state.caches.get(name.as_ref()))
-                .map(|cache| describe(cache, &base))
+                .access
+                .caches()
+                .filter_map(|(name, write)| Some((state.caches.get(name.as_ref())?, write)))
+                .map(|(cache, write)| describe(cache, &base, write))
                 .collect();
             Json(TokenResponse {
                 token: issued.token,
@@ -174,7 +163,7 @@ async fn issue(State(state): State<Tokens>, headers: HeaderMap) -> Response {
 }
 
 /// Describes a cache for clients.
-fn describe<'a>(cache: &'a Cache, base: &str) -> CacheInfo<'a> {
+fn describe<'a>(cache: &'a Cache, base: &str, write: bool) -> CacheInfo<'a> {
     let name = cache.name().as_ref();
     let (protocol, url, public_key) = match cache.protocol() {
         Protocol::Files => ("files", format!("{base}/{name}"), None),
@@ -193,6 +182,7 @@ fn describe<'a>(cache: &'a Cache, base: &str) -> CacheInfo<'a> {
         protocol,
         role: cache.role(),
         url,
+        access: if write { "write" } else { "read" },
         public_key,
     }
 }
@@ -217,7 +207,7 @@ mod tests {
     use axum::http::HeaderValue;
 
     use super::*;
-    use crate::cache::NixCache;
+    use crate::cache::{CacheName, NixCache};
     use crate::nix::SigningKey;
     use crate::nix::signing_tests::TEST_KEY;
 
@@ -236,7 +226,7 @@ mod tests {
     #[test]
     fn describes_caches() {
         let files = cache("sstate-pr", Protocol::Files, Some("sstate"));
-        let files = describe(&files, "https://g.example");
+        let files = describe(&files, "https://g.example", true);
         assert_eq!(files.url, "https://g.example/sstate-pr", "files URL");
         assert_eq!(files.role, "sstate", "configured role");
 
@@ -245,7 +235,7 @@ mod tests {
             Protocol::Nix(NixCache::new(SigningKey::load_text(TEST_KEY).unwrap(), 41)),
             None,
         );
-        let nix = describe(&nix, "https://g.example");
+        let nix = describe(&nix, "https://g.example", false);
         assert_eq!(nix.role, "nix", "the role defaults to the protocol");
         assert!(
             nix.public_key.is_some_and(|key| key.starts_with("test-1:")),
@@ -253,12 +243,12 @@ mod tests {
         );
 
         let hashserv_cache = cache("hash-pr", Protocol::Hashserv, None);
-        let hashserv = describe(&hashserv_cache, "https://g.example");
+        let hashserv = describe(&hashserv_cache, "https://g.example", true);
         assert_eq!(
             hashserv.url, "wss://g.example/_hashserv/hash-pr",
             "secure WebSocket"
         );
-        let local = describe(&hashserv_cache, "http://localhost:8080");
+        let local = describe(&hashserv_cache, "http://localhost:8080", true);
         assert_eq!(
             local.url, "ws://localhost:8080/_hashserv/hash-pr",
             "plain WebSocket"

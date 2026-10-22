@@ -66,7 +66,7 @@ enum Command {
     Serve(ServeArgs),
     /// Move chunks to the store of their longest-lived cache.
     Tier(RunArgs),
-    /// Sign a write token without exchanging an ID token.
+    /// Sign a token without exchanging an ID token.
     Token(MintArgs),
     /// Run scheduled and requested background tasks.
     Worker(WorkerArgs),

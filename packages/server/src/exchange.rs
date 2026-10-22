@@ -9,11 +9,10 @@ use opentelemetry::{KeyValue, global};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::cache::CacheName;
 use crate::oidc::{Issuer, VerifyError};
 use crate::telemetry::SCOPE;
 use crate::tiers::Tiers;
-use crate::token::{Grant, TokenKey};
+use crate::token::{Access, Grant, TokenKey};
 
 /// The claim that selects the issuer, read before the token is verified.
 #[derive(Debug, Deserialize)]
@@ -31,8 +30,8 @@ pub(crate) struct Issued {
     pub(crate) expires_at: u64,
     /// The tier that the ID token mapped to.
     pub(crate) tier: String,
-    /// The caches that the token may write to.
-    pub(crate) caches: Vec<CacheName>,
+    /// The granted caches.
+    pub(crate) access: Access,
 }
 
 /// Exchanges ID tokens from trusted issuers for granary tokens.
@@ -109,7 +108,7 @@ impl Exchange {
             .tiers
             .select(&claims)
             .ok_or_else(|| ExchangeError::NoTier { sub: sub.clone() })?;
-        let grant = Grant::new(sub, tier.name.clone(), tier.caches.clone(), self.lifetime);
+        let grant = Grant::new(sub, tier.name.clone(), tier.access(), self.lifetime);
         let token = self.key.sign(&grant).map_err(ExchangeError::Sign)?;
         tracing::info!(
             issuer = iss,
@@ -121,7 +120,7 @@ impl Exchange {
             token,
             expires_at: grant.exp,
             tier: grant.tier,
-            caches: grant.caches,
+            access: grant.access,
         })
     }
 }
@@ -180,8 +179,8 @@ mod tests {
         }))
         .unwrap();
         let tiers = serde_json::from_value(json!([
-            { "name": "main", "caches": ["sstate-main"], "claims": { "ref": ["refs/heads/main"] } },
-            { "name": "pr", "caches": ["sstate-pr"], "claims": { "ref": ["refs/pull/*"] } },
+            { "name": "main", "writes": ["sstate-main"], "claims": { "ref": ["refs/heads/main"] } },
+            { "name": "pr", "writes": ["sstate-pr"], "claims": { "ref": ["refs/pull/*"] } },
         ]))
         .unwrap();
         let key = "0123456789abcdef0123456789abcdef".parse().unwrap();
@@ -205,9 +204,12 @@ mod tests {
         let issued = exchange.exchange(&id_token).await.unwrap();
         assert_eq!(issued.tier, "pr", "the pr tier matches");
         let grant = exchange.key.verify(&issued.token).unwrap();
-        assert!(grant.allows("sstate-pr"), "the token writes sstate-pr");
         assert!(
-            !grant.allows("sstate-main"),
+            grant.access.may_write("sstate-pr"),
+            "the token writes sstate-pr"
+        );
+        assert!(
+            !grant.access.may_write("sstate-main"),
             "the token can't write sstate-main"
         );
         let remaining = grant.exp.saturating_sub(get_current_timestamp());

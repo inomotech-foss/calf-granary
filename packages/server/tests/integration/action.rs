@@ -79,11 +79,10 @@ async fn add_store_path(envs: &BTreeMap<String, String>, name: &str) -> String {
 fn config(forge: &str) -> String {
     format!(
         r#"
-anonymous_caches = ["sstate-pr", "nix-pr", "hash-pr"]
-
 [caches.sstate-pr]
 store = "test"
 role = "sstate"
+public = true
 
 [caches.downloads]
 store = "test"
@@ -91,11 +90,13 @@ role = "downloads"
 
 [caches.hash-pr]
 protocol = "hashserv"
+public = true
 
 [caches.nix-pr]
 store = "test"
 protocol = "nix"
 signing_key = "$dir/pr.key"
+public = true
 
 [issuers.forge]
 issuer = "{forge}"
@@ -104,7 +105,7 @@ claims = {{ repository_owner = ["inomotech"] }}
 
 [[tiers]]
 name = "pr"
-caches = ["sstate-pr", "downloads", "hash-pr", "nix-pr"]
+writes = ["sstate-pr", "downloads", "hash-pr", "nix-pr"]
 claims = {{ repository_owner = ["inomotech"] }}
 "#
     )
@@ -150,7 +151,7 @@ fn runner_env(server: &str, forge: &str, dir: &Path) -> BTreeMap<String, String>
 }
 
 /// Checks that post uploaded what the job built and nothing older.
-async fn assert_uploaded(server: &Server, before: &str, built: &str) {
+async fn assert_uploaded(server: &Server, token: &str, before: &str, built: &str) {
     let hash = |store_path: &str| {
         store_path
             .trim_start_matches("/nix/store/")
@@ -185,6 +186,7 @@ async fn assert_uploaded(server: &Server, before: &str, built: &str) {
         let status = server
             .http()
             .get(server.url(&url))
+            .bearer_auth(token)
             .send()
             .await
             .unwrap()
@@ -246,6 +248,7 @@ async fn sets_up_and_fills_caches() {
         "BitBake finds the token in netrc: {home_netrc}"
     );
 
+
     let built = add_store_path(&envs, "built").await;
     fs::create_dir_all(path("sstate").join(SSTATE).parent().unwrap()).unwrap();
     fs::write(path("sstate").join(SSTATE), "sstate").unwrap();
@@ -264,13 +267,16 @@ async fn sets_up_and_fills_caches() {
         "the credentials are removed"
     );
 
-    assert_uploaded(&server, &before, &built).await;
+    let reader = stack
+        .read_token(&["sstate-pr", "downloads", "nix-pr"])
+        .await;
+    assert_uploaded(&server, &reader, &before, &built).await;
     assert!(server.stop().await.success(), "serve stops cleanly");
 }
 
 #[tokio::test]
 #[ignore = "needs Postgres, object storage, Nix and Node"]
-async fn reads_anonymously_without_id_tokens() {
+async fn reads_public_caches_without_id_tokens() {
     let forge = Forge::start().await;
     let stack = Stack::new(&config(forge.url())).await;
     stack.write("pr.key", KEY);
@@ -309,7 +315,7 @@ async fn reads_anonymously_without_id_tokens() {
     );
     assert!(
         !bitbake.contains("PREMIRRORS"),
-        "downloads aren't anonymous here: {bitbake}"
+        "downloads aren't public here: {bitbake}"
     );
     assert!(
         !bitbake.contains("PASSWORD"),

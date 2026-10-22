@@ -174,6 +174,17 @@ impl Stack {
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
     }
 
+    /// Signs a token that may only read the caches.
+    pub(crate) async fn read_token(&self, caches: &[&str]) -> String {
+        let mut args = vec!["token"];
+        for cache in caches {
+            args.extend(["--read", cache]);
+        }
+        let output = self.run(&args).await;
+        assert!(output.status.success(), "token failed: {}", text(&output));
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+
     /// Starts `serve` and waits until it's ready.
     pub(crate) async fn serve(&self) -> Server {
         let address = free_address();

@@ -67,6 +67,12 @@ check(
     "large signature data",
 )
 
+try:
+    hashserv.create_client(pr_url).get_unihash(METHOD, T1)
+    check(False, "private caches need a token")
+except InvokeError:
+    pass
+
 pr = hashserv.create_client(pr_url, "ci", pr_token)
 check(pr.get_unihash(METHOD, T1) == U1, "the fallback answers reads")
 check(

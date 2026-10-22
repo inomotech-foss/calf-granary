@@ -3,16 +3,18 @@
 use core::iter;
 
 use reqwest::StatusCode;
-use reqwest::header::{AUTHORIZATION, CONTENT_LENGTH};
+use reqwest::header::{AUTHORIZATION, CONTENT_LENGTH, WWW_AUTHENTICATE};
 
 use crate::harness::{Server, Stack};
 
 const CACHES: &str = r#"
 [caches.main]
 store = "test"
+public = true
 
 [caches.pr]
 store = "test"
+public = true
 fallback = "main"
 "#;
 
@@ -216,7 +218,8 @@ async fn stores_identical_content_once() {
 #[ignore = "needs Postgres and object storage"]
 async fn chunks_content_for_deduplication() {
     let stack = Stack::new(
-        "[caches.chunked]\nstore = \"test\"\nchunking = true\n\n[caches.whole]\nstore = \"test\"\n",
+        "[caches.chunked]\nstore = \"test\"\nchunking = true\npublic = \
+         true\n\n[caches.whole]\nstore = \"test\"\npublic = true\n",
     )
     .await;
     stack.migrate().await;
@@ -329,6 +332,57 @@ async fn answers_missing_keys() {
             .map_or_else(reqwest::Error::is_request, |response| response.status()
                 == StatusCode::PAYLOAD_TOO_LARGE),
         "large questions are refused unread, possibly before the body is sent: {oversized:?}"
+    );
+    assert!(server.stop().await.success(), "serve stops cleanly");
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres and object storage"]
+async fn private_caches_need_a_token() {
+    let stack = Stack::new(
+        "[caches.private]\nstore = \"test\"\nfallback = \"base\"\n\n[caches.base]\nstore = \
+         \"test\"\n",
+    )
+    .await;
+    stack.migrate().await;
+    let server = stack.serve().await;
+    let writer = stack.token(&["base"]).await;
+    put(&server, Some(&writer), "base/a", b"a".to_vec()).await;
+    let reader = stack.read_token(&["private"]).await;
+    let other = stack.read_token(&["base"]).await;
+    let read = async |token: Option<&str>| {
+        let mut request = server.http().get(server.url("private/a"));
+        if let Some(token) = token {
+            request = request.basic_auth("granary", Some(token));
+        }
+        request.send().await.unwrap()
+    };
+
+    let anonymous = read(None).await;
+    assert_eq!(
+        anonymous.status(),
+        StatusCode::UNAUTHORIZED,
+        "anonymous reads are refused"
+    );
+    assert_eq!(
+        anonymous.headers()[WWW_AUTHENTICATE],
+        "Basic realm=\"granary\"",
+        "clients are asked for credentials"
+    );
+    assert_eq!(
+        read(Some(&other)).await.status(),
+        StatusCode::FORBIDDEN,
+        "a token for the fallback alone doesn't grant the cache"
+    );
+    assert_eq!(
+        read(Some(&reader)).await.status(),
+        StatusCode::OK,
+        "a read token reads through the fallback"
+    );
+    assert_eq!(
+        put(&server, Some(&reader), "private/b", b"b".to_vec()).await,
+        StatusCode::FORBIDDEN,
+        "a read token can't write"
     );
     assert!(server.stop().await.success(), "serve stops cleanly");
 }

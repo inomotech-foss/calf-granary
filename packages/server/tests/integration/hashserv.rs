@@ -11,6 +11,7 @@ stores = {}
 
 [caches.hash-main]
 protocol = "hashserv"
+public = true
 
 [caches.hash-pr]
 protocol = "hashserv"

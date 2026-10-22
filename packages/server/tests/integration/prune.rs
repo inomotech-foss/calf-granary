@@ -16,9 +16,11 @@ collection_grace = "1s"
 [caches.short]
 store = "test"
 retention = "3s"
+public = true
 
 [caches.kept]
 store = "test"
+public = true
 "#;
 
 #[tokio::test]
@@ -167,10 +169,12 @@ prefix = "$prefix/long"
 [caches.main]
 store = "long"
 retention = "30d"
+public = true
 
 [caches.pr]
 store = "short"
 retention = "7d"
+public = true
 fallback = "main"
 "#,
     )

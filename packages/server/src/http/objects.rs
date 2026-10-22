@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::{Path, State};
-use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE, ETAG, LAST_MODIFIED};
+use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE, ETAG, LAST_MODIFIED, WWW_AUTHENTICATE};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
-use axum::response::{IntoResponse as _, Response};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use deadpool_postgres::{Client, Pool};
@@ -51,6 +51,31 @@ struct Objects {
     hashserv: Arc<HashservStats>,
     /// Limits the NAR files compressed with xz at the same time.
     xz: Arc<Semaphore>,
+}
+
+/// Why a request may not read a cache.
+#[derive(Clone, Copy, Debug)]
+enum ReadDenied {
+    /// The request has no valid token.
+    Unauthenticated,
+    /// The token doesn't grant the cache.
+    NotGranted,
+}
+
+impl IntoResponse for ReadDenied {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Unauthenticated => (
+                StatusCode::UNAUTHORIZED,
+                [(
+                    WWW_AUTHENTICATE,
+                    HeaderValue::from_static("Basic realm=\"granary\""),
+                )],
+            )
+                .into_response(),
+            Self::NotGranted => StatusCode::FORBIDDEN.into_response(),
+        }
+    }
 }
 
 /// A question about which keys a cache lacks.
@@ -105,7 +130,26 @@ impl Objects {
         }
     }
 
-    /// Checks that the request carries a granary token that grants the
+    /// Checks that the cache is public or the request carries a granary
+    /// token that may read it.
+    ///
+    /// Refusals without a token challenge for basic authentication, so that
+    /// clients like wget send their netrc credentials.
+    fn authorize_read(&self, headers: &HeaderMap, cache: &Cache) -> Result<(), ReadDenied> {
+        if cache.is_public() {
+            return Ok(());
+        }
+        let grant = credential(headers)
+            .and_then(|token| self.key.verify(&token).ok())
+            .ok_or(ReadDenied::Unauthenticated)?;
+        if grant.access.may_read(cache.name().as_ref()) {
+            Ok(())
+        } else {
+            Err(ReadDenied::NotGranted)
+        }
+    }
+
+    /// Checks that the request carries a granary token that may write to the
     /// cache.
     fn authorize(&self, headers: &HeaderMap, cache: &str) -> Result<Grant, StatusCode> {
         let token = credential(headers).ok_or(StatusCode::UNAUTHORIZED)?;
@@ -113,7 +157,7 @@ impl Objects {
             tracing::info!(error = &err as &dyn Error, "rejected a write token");
             StatusCode::UNAUTHORIZED
         })?;
-        if grant.allows(cache) {
+        if grant.access.may_write(cache) {
             Ok(grant)
         } else {
             tracing::info!(sub = grant.sub, cache, "rejected a write outside the grant");
@@ -164,11 +208,18 @@ pub(super) fn router(
 }
 
 /// Streams an object, from the fallback cache if needed.
-async fn get_object(State(state): State<Objects>, path: Path<(String, String)>) -> Response {
+async fn get_object(
+    State(state): State<Objects>,
+    path: Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
     let Path((cache, key)) = &path;
     let Some(found) = state.caches.get(cache) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    if let Err(denied) = state.authorize_read(&headers, found) {
+        return denied.into_response();
+    }
     if let Protocol::Nix(settings) = found.protocol() {
         return nix::get(&state, found, settings, key, false).await;
     }
@@ -176,11 +227,18 @@ async fn get_object(State(state): State<Objects>, path: Path<(String, String)>) 
 }
 
 /// Returns the headers of an object, from the fallback cache if needed.
-async fn head_object(State(state): State<Objects>, path: Path<(String, String)>) -> Response {
+async fn head_object(
+    State(state): State<Objects>,
+    path: Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
     let Path((cache, key)) = &path;
     let Some(found) = state.caches.get(cache) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    if let Err(denied) = state.authorize_read(&headers, found) {
+        return denied.into_response();
+    }
     if let Protocol::Nix(settings) = found.protocol() {
         return nix::get(&state, found, settings, key, true).await;
     }
@@ -293,11 +351,15 @@ async fn put_object(
 async fn missing(
     State(state): State<Objects>,
     Path(cache): Path<String>,
+    headers: HeaderMap,
     Json(request): Json<MissingRequest>,
 ) -> Response {
     let Some(found) = state.caches.get(&cache) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    if let Err(denied) = state.authorize_read(&headers, found) {
+        return denied.into_response();
+    }
     if !matches!(found.protocol(), Protocol::Files) {
         return StatusCode::NOT_FOUND.into_response();
     }

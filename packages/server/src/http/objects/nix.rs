@@ -493,11 +493,15 @@ pub(super) async fn public_key(
 pub(super) async fn missing(
     State(state): State<Objects>,
     Path(cache): Path<String>,
+    headers: HeaderMap,
     Json(request): Json<MissingRequest>,
 ) -> Response {
     let Some(found) = state.caches.get(&cache) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    if let Err(denied) = state.authorize_read(&headers, found) {
+        return denied.into_response();
+    }
     if !matches!(found.protocol(), Protocol::Nix(_)) {
         return StatusCode::NOT_FOUND.into_response();
     }

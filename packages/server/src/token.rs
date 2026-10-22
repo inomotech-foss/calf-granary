@@ -1,4 +1,4 @@
-//! Tokens that grant write access to caches.
+//! Tokens that grant access to caches.
 
 use core::fmt;
 use core::str::FromStr;
@@ -19,6 +19,41 @@ const ISSUER: &str = "calf-granary";
 /// The shortest accepted secret, in bytes.
 const MIN_SECRET_LENGTH: usize = 32;
 
+/// The caches that a token grants.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Access {
+    /// The caches that the token may write to and read.
+    #[serde(default)]
+    pub(crate) writes: Vec<CacheName>,
+    /// The caches that the token may only read.
+    #[serde(default)]
+    pub(crate) reads: Vec<CacheName>,
+}
+
+impl Access {
+    /// Checks whether writing to the cache is allowed.
+    pub(crate) fn may_write(&self, cache: &str) -> bool {
+        self.writes.iter().any(|allowed| allowed.as_ref() == cache)
+    }
+
+    /// Checks whether reading the cache, and through it its fallback, is
+    /// allowed.
+    pub(crate) fn may_read(&self, cache: &str) -> bool {
+        self.may_write(cache) || self.reads.iter().any(|allowed| allowed.as_ref() == cache)
+    }
+
+    /// The granted caches and whether each may be written to.
+    pub(crate) fn caches(&self) -> impl Iterator<Item = (&CacheName, bool)> {
+        let writes = self.writes.iter().map(|cache| (cache, true));
+        let reads = self
+            .reads
+            .iter()
+            .filter(|cache| !self.writes.contains(cache))
+            .map(|cache| (cache, false));
+        writes.chain(reads)
+    }
+}
+
 /// What a granary token grants.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Grant {
@@ -32,18 +67,14 @@ pub(crate) struct Grant {
     pub(crate) exp: u64,
     /// The tier that the ID token mapped to.
     pub(crate) tier: String,
-    /// The caches that the token may write to.
-    pub(crate) caches: Vec<CacheName>,
+    /// The granted caches.
+    #[serde(flatten)]
+    pub(crate) access: Access,
 }
 
 impl Grant {
     /// Creates a grant that is valid for `lifetime` from now.
-    pub(crate) fn new(
-        sub: String,
-        tier: String,
-        caches: Vec<CacheName>,
-        lifetime: Duration,
-    ) -> Self {
+    pub(crate) fn new(sub: String, tier: String, access: Access, lifetime: Duration) -> Self {
         let iat = get_current_timestamp();
         Self {
             iss: ISSUER.to_owned(),
@@ -51,13 +82,8 @@ impl Grant {
             iat,
             exp: iat.saturating_add(lifetime.as_secs()),
             tier,
-            caches,
+            access,
         }
-    }
-
-    /// Checks whether the grant allows writing to the cache.
-    pub(crate) fn allows(&self, cache: &str) -> bool {
-        self.caches.iter().any(|allowed| allowed.as_ref() == cache)
     }
 }
 
@@ -144,17 +170,29 @@ mod tests {
     #[test]
     fn round_trip() {
         let key = key("0123456789abcdef0123456789abcdef");
-        let cache = CacheName::try_from("sstate-pr".to_owned()).unwrap();
+        let name = |name: &str| CacheName::try_from(name.to_owned()).unwrap();
         let grant = Grant::new(
             "repo:inomotech/x:pull_request".to_owned(),
             "pr".to_owned(),
-            vec![cache],
+            Access {
+                writes: vec![name("sstate-pr")],
+                reads: vec![name("downloads")],
+            },
             Duration::from_hours(1),
         );
         let verified = key.verify(&key.sign(&grant).unwrap()).unwrap();
         assert_eq!(verified, grant, "the grant survives signing");
-        assert!(verified.allows("sstate-pr"), "the listed cache is allowed");
-        assert!(!verified.allows("sstate-main"), "other caches are not");
+        let access = &verified.access;
+        assert!(access.may_write("sstate-pr"), "the written cache");
+        assert!(access.may_read("sstate-pr"), "writing includes reading");
+        assert!(
+            access.may_read("downloads") && !access.may_write("downloads"),
+            "the read cache"
+        );
+        assert!(
+            !access.may_read("sstate-main"),
+            "other caches are not granted"
+        );
     }
 
     #[test]
@@ -164,7 +202,7 @@ mod tests {
         let grant = Grant::new(
             "sub".to_owned(),
             "pr".to_owned(),
-            Vec::new(),
+            Access::default(),
             Duration::from_hours(1),
         );
         assert!(

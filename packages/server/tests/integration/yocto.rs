@@ -11,9 +11,11 @@ use crate::harness::{SERVER_BIN, Server, Stack};
 const CACHES: &str = r#"
 [caches.main]
 store = "test"
+public = true
 
 [caches.pr]
 store = "test"
+public = true
 fallback = "main"
 "#;
 

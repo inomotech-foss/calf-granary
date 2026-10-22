@@ -21,11 +21,13 @@ const CACHES: &str = r#"
 store = "test"
 protocol = "nix"
 signing_key = "$dir/main.key"
+public = true
 
 [caches.nix-pr]
 store = "test"
 protocol = "nix"
 signing_key = "$dir/pr.key"
+public = true
 priority = 30
 fallback = "nix-main"
 "#;

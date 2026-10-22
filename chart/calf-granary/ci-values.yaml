@@ -2,8 +2,6 @@ image:
   tag: test
 config: |
   public_url = "https://granary.example.org"
-  anonymous_caches = ["sstate-main"]
-
   [stores.long]
   bucket = "granary-long"
 
@@ -11,6 +9,7 @@ config: |
   store = "long"
   role = "sstate"
   retention = "30d"
+  public = true
 database:
   secretName: granary-database
 tokenSecret:

@@ -1,8 +1,9 @@
 //! The Yocto hash equivalence protocol over WebSocket.
 //!
-//! Clients connect to `wss://<server>/_hashserv/<cache>`. Reads need no
-//! token. Reports need `auth` with any username and a granary token that
-//! grants the cache as the password.
+//! Clients connect to `wss://<server>/_hashserv/<cache>` and log in with
+//! `auth`, using any username and a granary token as the password. Reads
+//! need a token that grants the cache unless the cache is public. Reports
+//! need a token that may write to it.
 
 mod stats;
 
@@ -107,6 +108,18 @@ enum Request<'a> {
 }
 
 impl Request<'_> {
+    /// Whether the command reads the cache.
+    const fn reads(&self) -> bool {
+        matches!(
+            self,
+            Self::Get(_)
+                | Self::GetOuthash(_)
+                | Self::GetStream(_)
+                | Self::ExistsStream(_)
+                | Self::Report(_)
+        )
+    }
+
     /// The command name, for statistics.
     const fn command(&self) -> &'static str {
         match self {
@@ -356,6 +369,21 @@ struct Login {
     subject: String,
     /// Whether the token grants reports to the cache.
     can_report: bool,
+    /// Whether the token grants reads of the cache.
+    can_read: bool,
+}
+
+impl Login {
+    /// The upstream permissions that the login has.
+    const fn permissions(&self, public: bool) -> &'static [&'static str] {
+        if self.can_report {
+            &["@read", "@report"]
+        } else if self.can_read || public {
+            &["@read"]
+        } else {
+            &[]
+        }
+    }
 }
 
 /// Answers the commands of one connection.
@@ -468,11 +496,12 @@ impl Handler<'_> {
                 format!("Unable to authenticate as {}", request.username).into(),
             ));
         };
-        let can_report = grant.allows(self.cache.name().as_ref());
+        let cache = self.cache.name().as_ref();
         let login = Login {
             username: request.username.into_owned(),
+            can_report: grant.access.may_write(cache),
+            can_read: grant.access.may_read(cache),
             subject: grant.sub,
-            can_report,
         };
         tracing::debug!(
             sub = login.subject,
@@ -482,7 +511,7 @@ impl Handler<'_> {
         let reply = json(&UserReply {
             result: Some(true),
             username: &login.username,
-            permissions: permissions(Some(&login)),
+            permissions: login.permissions(self.cache.is_public()),
         });
         self.login = Some(login);
         reply
@@ -505,26 +534,42 @@ impl Handler<'_> {
         json(&UserReply {
             result: None,
             username: &login.username,
-            permissions: permissions(Some(login)),
+            permissions: login.permissions(self.cache.is_public()),
         })
+    }
+
+    /// Fails unless the cache is public or the session may read it.
+    fn require_read(&self) -> Result<(), Failure> {
+        let granted =
+            self.cache.is_public() || self.login.as_ref().is_some_and(|login| login.can_read);
+        if granted {
+            Ok(())
+        } else {
+            Err(self.denied("@read"))
+        }
     }
 
     /// Fails unless the session may report, naming the missing permission.
     fn require_report(&self, permission: &str) -> Result<(), Failure> {
-        match &self.login {
-            Some(login) if login.can_report => Ok(()),
-            Some(login) => Err(Failure::Invoke(
+        if self.login.as_ref().is_some_and(|login| login.can_report) {
+            Ok(())
+        } else {
+            Err(self.denied(permission))
+        }
+    }
+
+    /// The upstream error for a missing permission.
+    fn denied(&self, permission: &str) -> Failure {
+        let message = self.login.as_ref().map_or_else(
+            || format!("Anonymous user is not allowed to access permissions(s) {permission}"),
+            |login| {
                 format!(
                     "User {} is not allowed to access permissions(s) {permission}",
                     login.username
                 )
-                .into(),
-            )),
-            None => Err(Failure::Invoke(
-                format!("Anonymous user is not allowed to access permissions(s) {permission}")
-                    .into(),
-            )),
-        }
+            },
+        );
+        Failure::Invoke(message.into())
     }
 }
 
@@ -605,6 +650,9 @@ impl Session<'_> {
         lines: &mut Vec<Utf8Bytes>,
     ) -> Result<Option<Utf8Bytes>, Failure> {
         let handler = &mut self.handler;
+        if request.reads() {
+            handler.require_read()?;
+        }
         let reply = match request {
             Request::Ping(_) => json(&PingReply { alive: true })?,
             Request::Get(request) => handler.get(&handler.client().await?, &request).await?,
@@ -835,13 +883,4 @@ fn stream_line(line: Utf8Bytes) -> Result<Utf8Bytes, Failure> {
 /// Whether a stream line ends stream mode.
 fn is_end(line: &str) -> bool {
     line.is_empty() || line == "END"
-}
-
-/// The permissions of a session.
-fn permissions(login: Option<&Login>) -> &'static [&'static str] {
-    if login.is_some_and(|login| login.can_report) {
-        &["@read", "@report"]
-    } else {
-        &["@read"]
-    }
 }
