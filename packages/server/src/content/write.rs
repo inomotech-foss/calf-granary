@@ -73,6 +73,7 @@ impl Content {
             .stores
             .get(store.as_ref())
             .ok_or_else(|| WriteError::UnknownStore(store.clone()))?;
+        let _permit = self.uploads.acquire().await.ok();
         let key = new_object_key().map_err(WriteError::Random)?;
         let (hash, size) = upload(objects.as_ref(), &key, body).await?;
         let stored_size = i64::try_from(size).map_err(|_overflow| WriteError::TooLarge)?;
@@ -131,6 +132,7 @@ impl Content {
             .get(store.as_ref())
             .ok_or_else(|| WriteError::UnknownStore(store.clone()))?
             .as_ref();
+        let _permit = self.uploads.acquire().await.ok();
         let mut hash = Hasher::new();
         let mut size = 0u64;
         let mut chunker = Chunker::default();

@@ -1,5 +1,6 @@
 //! The configuration file.
 
+use core::num::NonZeroUsize;
 use core::time::Duration;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -32,6 +33,9 @@ const DEFAULT_COLLECTION_GRACE: Duration = Duration::from_hours(24);
 
 /// The shortest grace period that is safe for slow uploads.
 const SAFE_COLLECTION_GRACE: Duration = Duration::from_hours(1);
+
+/// How many uploads one process stores at the same time unless configured.
+const DEFAULT_MAX_UPLOADS: NonZeroUsize = NonZeroUsize::new(16).unwrap();
 
 /// How long issued tokens are valid unless configured.
 const DEFAULT_TOKEN_LIFETIME: Duration = Duration::from_hours(6);
@@ -72,6 +76,9 @@ pub(crate) struct Config {
     ///
     /// Uploads must finish within this time.
     collection_grace: Option<ConfigDuration>,
+    /// How many uploads one process stores at the same time, 16 by default.
+    /// Others wait. Each upload buffers up to 40 MiB.
+    max_uploads: Option<NonZeroUsize>,
 }
 
 impl Config {
@@ -102,7 +109,11 @@ impl Config {
                 "collection_grace is short, uploads that take longer fail"
             );
         }
-        Ok(Content::new(Stores::new(stores), grace))
+        Ok(Content::new(
+            Stores::new(stores),
+            grace,
+            self.max_uploads.unwrap_or(DEFAULT_MAX_UPLOADS),
+        ))
     }
 
     /// Sets up the caches.

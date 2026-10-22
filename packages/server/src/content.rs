@@ -13,11 +13,13 @@ mod upload;
 mod write;
 mod zstd;
 
+use core::num::NonZeroUsize;
 use core::time::Duration;
 
 use aws_lc_rs::error::Unspecified;
 use aws_lc_rs::rand;
 use object_store::path::Path;
+use tokio::sync::Semaphore;
 
 pub(crate) use self::collect::{CollectError, CollectStats};
 pub(crate) use self::read::Encoding;
@@ -37,12 +39,18 @@ pub(crate) struct Content {
     /// How long unreferenced chunks and blobs are kept, so that uploads in
     /// progress can still reference them.
     grace: Duration,
+    /// Limits the uploads in progress, since each one buffers parts.
+    uploads: Semaphore,
 }
 
 impl Content {
     /// Wraps the stores.
-    pub(crate) const fn new(stores: Stores, grace: Duration) -> Self {
-        Self { stores, grace }
+    pub(crate) fn new(stores: Stores, grace: Duration, max_uploads: NonZeroUsize) -> Self {
+        Self {
+            stores,
+            grace,
+            uploads: Semaphore::new(max_uploads.get()),
+        }
     }
 
     /// The names of the configured stores.
