@@ -1,6 +1,8 @@
 //! Verifying ID tokens from trusted OIDC issuers.
 
+use core::error::Error;
 use core::time::Duration;
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Instant;
 
 use jsonwebtoken::errors::Error as JwtError;
@@ -13,10 +15,10 @@ use tokio::sync::Mutex;
 
 use crate::claims::Requirements;
 
-/// How long fetched keys are used before they are fetched again.
+/// How long after a fetch the keys are fetched again.
 const KEYS_MAX_AGE: Duration = Duration::from_hours(1);
 
-/// How long an unknown key ID waits before keys are fetched again.
+/// How long after a fetch an unknown key ID fetches the keys again.
 const KEYS_MIN_AGE: Duration = Duration::from_mins(1);
 
 /// The signature algorithms accepted from issuers.
@@ -80,9 +82,17 @@ struct Discovery {
 #[derive(Debug)]
 struct Keys {
     /// The keys.
-    set: JwkSet,
-    /// When the keys were fetched.
-    fetched: Instant,
+    set: Arc<JwkSet>,
+    /// When the keys were last fetched or a fetch last failed.
+    attempted: Instant,
+}
+
+impl Keys {
+    /// Whether the keys may answer for the key ID without a new fetch.
+    fn current(&self, kid: &str) -> bool {
+        let age = self.attempted.elapsed();
+        age < KEYS_MAX_AGE && (self.set.find(kid).is_some() || age < KEYS_MIN_AGE)
+    }
 }
 
 /// A trusted OIDC issuer.
@@ -97,7 +107,9 @@ pub(crate) struct Issuer {
     /// The client that fetches keys.
     client: Client,
     /// The cached keys.
-    keys: Mutex<Option<Keys>>,
+    keys: RwLock<Option<Keys>>,
+    /// Held while the keys are fetched, so only one request fetches them.
+    fetching: Mutex<()>,
 }
 
 impl Issuer {
@@ -108,7 +120,8 @@ impl Issuer {
             audience: config.audience,
             claims: config.claims.0,
             client,
-            keys: Mutex::new(None),
+            keys: RwLock::new(None),
+            fetching: Mutex::new(()),
         }
     }
 
@@ -142,25 +155,52 @@ impl Issuer {
 
     /// Returns the key with the ID, fetching the keys if they are old or
     /// don't contain it.
+    ///
+    /// If a fetch fails, the old keys stay in use until the next attempt.
     async fn key(&self, kid: &str) -> Result<DecodingKey, VerifyError> {
-        let mut keys = self.keys.lock().await;
-        let refresh = keys.as_ref().is_none_or(|cached| {
-            let age = cached.fetched.elapsed();
-            age >= KEYS_MAX_AGE || (cached.set.find(kid).is_none() && age >= KEYS_MIN_AGE)
-        });
-        if refresh {
-            *keys = Some(Keys {
-                set: self.fetch().await?,
-                fetched: Instant::now(),
-            });
+        if let Some(set) = self.current(kid) {
+            return decoding_key(&set, kid);
         }
-        let key = keys
-            .as_ref()
-            .and_then(|cached| cached.set.find(kid))
-            .map(DecodingKey::from_jwk);
+        let _fetching = self.fetching.lock().await;
+        if let Some(set) = self.current(kid) {
+            return decoding_key(&set, kid);
+        }
+        let fetched = self.fetch().await;
+        let mut keys = self.keys.write().unwrap_or_else(PoisonError::into_inner);
+        let set = match fetched {
+            Ok(set) => {
+                let set = Arc::new(set);
+                *keys = Some(Keys {
+                    set: Arc::clone(&set),
+                    attempted: Instant::now(),
+                });
+                set
+            }
+            Err(err) => {
+                let Some(stale) = keys.as_mut() else {
+                    return Err(err);
+                };
+                tracing::warn!(
+                    error = &err as &dyn Error,
+                    issuer = self.url,
+                    "failed to fetch the issuer's keys, using the old ones"
+                );
+                stale.attempted = Instant::now();
+                Arc::clone(&stale.set)
+            }
+        };
         drop(keys);
-        key.ok_or_else(|| VerifyError::UnknownKey(kid.to_owned()))?
-            .map_err(VerifyError::Key)
+        decoding_key(&set, kid)
+    }
+
+    /// The cached keys, if they may answer for the key ID.
+    fn current(&self, kid: &str) -> Option<Arc<JwkSet>> {
+        self.keys
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .filter(|keys| keys.current(kid))
+            .map(|keys| Arc::clone(&keys.set))
     }
 
     /// Fetches the signing keys through OIDC discovery.
@@ -225,6 +265,14 @@ pub(crate) enum VerifyError {
     UnknownKey(String),
 }
 
+/// Finds the key with the ID in a key set.
+fn decoding_key(set: &JwkSet, kid: &str) -> Result<DecodingKey, VerifyError> {
+    let jwk = set
+        .find(kid)
+        .ok_or_else(|| VerifyError::UnknownKey(kid.to_owned()))?;
+    DecodingKey::from_jwk(jwk).map_err(VerifyError::Key)
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -239,7 +287,8 @@ mod tests {
             "claims": claims,
         }))
         .unwrap();
-        Issuer::new(config, Client::new())
+        let client = Client::builder().pool_max_idle_per_host(0).build().unwrap();
+        Issuer::new(config, client)
     }
 
     #[test]
@@ -254,6 +303,22 @@ mod tests {
                 "issuers without claim patterns are refused"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn keeps_old_keys_while_the_issuer_is_down() {
+        let fake = FakeIssuer::start().await;
+        let issuer = issuer(&fake, &json!({ "repository_owner": ["inomotech"] }));
+        let token = fake.token(&json!({ "aud": "granary", "repository_owner": "inomotech" }));
+        issuer.verify(&token).await.unwrap();
+        fake.stop();
+        if let Some(keys) = issuer.keys.write().unwrap().as_mut() {
+            keys.attempted = Instant::now().checked_sub(KEYS_MAX_AGE).unwrap();
+        }
+        assert!(
+            issuer.verify(&token).await.is_ok(),
+            "the old keys verify the token"
+        );
     }
 
     #[tokio::test]

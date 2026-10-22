@@ -8,6 +8,7 @@ use jsonwebtoken::jwk::Jwk;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode, get_current_timestamp};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
+use tokio::task::JoinHandle;
 
 /// The key ID of every fake issuer's key.
 const KEY_ID: &str = "test";
@@ -18,6 +19,8 @@ pub(crate) struct FakeIssuer {
     url: String,
     /// The signing key.
     key: EncodingKey,
+    /// The server task.
+    server: JoinHandle<()>,
 }
 
 impl FakeIssuer {
@@ -40,8 +43,13 @@ impl FakeIssuer {
                 get(async move || Json(discovery)),
             )
             .route("/jwks", get(async move || Json(keys)));
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        Self { url, key }
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        Self { url, key, server }
+    }
+
+    /// Stops serving. Open connections stay until the client closes them.
+    pub(crate) fn stop(&self) {
+        self.server.abort();
     }
 
     /// The issuer URL.
