@@ -16,6 +16,7 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use deadpool_postgres::{Client, Pool};
 use serde::{Deserialize, Serialize};
+use tokio::sync::Semaphore;
 
 use self::hashserv::HashservStats;
 use self::metrics::{Lookup, ObjectMetrics, Upload};
@@ -27,6 +28,9 @@ use crate::token::{Grant, TokenKey};
 
 /// The most keys one missing-keys request may ask about.
 const MAX_KEYS: usize = 10_000;
+
+/// How many NAR files are compressed with xz at the same time.
+const XZ_CONCURRENCY: usize = 2;
 
 /// Shared state of the object routes.
 #[derive(Clone, Debug)]
@@ -45,6 +49,8 @@ struct Objects {
     metrics: ObjectMetrics,
     /// Request statistics of hashserv caches.
     hashserv: Arc<HashservStats>,
+    /// Limits the NAR files compressed with xz at the same time.
+    xz: Arc<Semaphore>,
 }
 
 /// A question about which keys a cache lacks.
@@ -153,6 +159,7 @@ pub(super) fn router(
             key,
             metrics: ObjectMetrics::new(),
             hashserv: Arc::new(HashservStats::new()),
+            xz: Arc::new(Semaphore::new(XZ_CONCURRENCY)),
         })
 }
 

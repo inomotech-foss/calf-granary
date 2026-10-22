@@ -3,7 +3,9 @@
 use core::error::Error;
 use core::str;
 use std::io;
+use std::sync::Arc;
 
+use async_compression::Level;
 use async_compression::tokio::bufread::XzEncoder;
 use axum::Json;
 use axum::body::{Body, to_bytes};
@@ -149,7 +151,8 @@ pub(super) async fn get(
 /// Serves a NAR file that `nix copy` uploaded, compressed as its name says.
 ///
 /// Nix keeps the narinfos it uploads and may download from their URLs
-/// instead of the ones the cache serves.
+/// instead of the ones the cache serves. xz is compressed on the fly with
+/// the fastest preset, a few files at a time.
 async fn nar_file(
     state: &Objects,
     cache: &Cache,
@@ -188,8 +191,15 @@ async fn nar_file(
         }
     };
     let body = if compression == NarCompression::Xz {
+        let Ok(permit) = Arc::clone(&state.xz).acquire_owned().await else {
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        };
         let plain = StreamReader::new(stream.map_err(io::Error::other));
-        Body::from_stream(ReaderStream::new(XzEncoder::new(plain)))
+        let xz = ReaderStream::new(XzEncoder::with_quality(plain, Level::Fastest));
+        Body::from_stream(xz.map(move |bytes| {
+            let _held = &permit;
+            bytes
+        }))
     } else {
         Body::from_stream(stream)
     };
