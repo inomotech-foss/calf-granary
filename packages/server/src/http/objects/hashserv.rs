@@ -371,6 +371,11 @@ struct Session<'a> {
 }
 
 impl Handler<'_> {
+    /// Takes a database connection.
+    async fn client(&self) -> Result<Client, Failure> {
+        self.state.client().await.map_err(|_status| Failure::Close)
+    }
+
     /// Answers `get`.
     async fn get(&self, client: &Client, request: &GetRequest<'_>) -> Result<Utf8Bytes, Failure> {
         let method = request.method.as_ref();
@@ -591,27 +596,29 @@ impl Session<'_> {
         request: Request<'_>,
         lines: &mut Vec<Utf8Bytes>,
     ) -> Result<Option<Utf8Bytes>, Failure> {
-        let client = self
-            .handler
-            .state
-            .client()
-            .await
-            .map_err(|_status| Failure::Close)?;
         let handler = &mut self.handler;
         let reply = match request {
             Request::Ping(_) => json(&PingReply { alive: true })?,
-            Request::Get(request) => handler.get(&client, &request).await?,
-            Request::GetOuthash(request) => handler.get_outhash(&client, &request).await?,
+            Request::Get(request) => handler.get(&handler.client().await?, &request).await?,
+            Request::GetOuthash(request) => {
+                handler
+                    .get_outhash(&handler.client().await?, &request)
+                    .await?
+            }
             Request::GetStream(_) => {
-                self.stream(&client, StreamKind::Unihashes, lines).await?;
+                self.stream(StreamKind::Unihashes, lines).await?;
                 return Ok(None);
             }
             Request::ExistsStream(_) => {
-                self.stream(&client, StreamKind::Exists, lines).await?;
+                self.stream(StreamKind::Exists, lines).await?;
                 return Ok(None);
             }
-            Request::Report(request) => handler.report(&client, &request).await?,
-            Request::ReportEquiv(request) => handler.report_equiv(&client, &request).await?,
+            Request::Report(request) => handler.report(&handler.client().await?, &request).await?,
+            Request::ReportEquiv(request) => {
+                handler
+                    .report_equiv(&handler.client().await?, &request)
+                    .await?
+            }
             Request::Auth(request) => handler.auth(request).await?,
             Request::GetUser(request) => handler.get_user(&request)?,
             Request::BecomeUser(_) => {
@@ -633,9 +640,11 @@ impl Session<'_> {
     }
 
     /// Runs stream mode until the client sends `END`.
+    ///
+    /// Each batch of lines takes a connection only for its query, so idle
+    /// streams hold none.
     async fn stream(
         &mut self,
-        client: &Client,
         kind: StreamKind,
         lines: &mut Vec<Utf8Bytes>,
     ) -> Result<(), Failure> {
@@ -660,8 +669,8 @@ impl Session<'_> {
                 }
             }
             match kind {
-                StreamKind::Unihashes => self.answer_unihashes(client, lines).await?,
-                StreamKind::Exists => self.answer_exists(client, lines).await?,
+                StreamKind::Unihashes => self.answer_unihashes(lines).await?,
+                StreamKind::Exists => self.answer_exists(lines).await?,
             }
             if ended {
                 return if self.send(STREAM_OK).await {
@@ -674,11 +683,7 @@ impl Session<'_> {
     }
 
     /// Answers `<method> <taskhash>` lines with unihashes, or empty lines.
-    async fn answer_unihashes(
-        &mut self,
-        client: &Client,
-        lines: &[Utf8Bytes],
-    ) -> Result<(), Failure> {
+    async fn answer_unihashes(&mut self, lines: &[Utf8Bytes]) -> Result<(), Failure> {
         let tasks = lines
             .iter()
             .map(|line| {
@@ -692,12 +697,14 @@ impl Session<'_> {
             })
             .collect::<Result<Vec<Option<(&str, Sha256)>>, _>>()?;
         let valid: Vec<(&str, Sha256)> = tasks.iter().flatten().copied().collect();
+        let client = self.handler.client().await?;
         let mut found = self
             .handler
             .cache
-            .unihashes(client, &valid)
+            .unihashes(&client, &valid)
             .await?
             .into_iter();
+        drop(client);
         for task in tasks {
             let answer = task
                 .and_then(|_task| found.next().flatten())
@@ -710,15 +717,17 @@ impl Session<'_> {
     }
 
     /// Answers unihash lines with `true` or `false`.
-    async fn answer_exists(&mut self, client: &Client, lines: &[Utf8Bytes]) -> Result<(), Failure> {
+    async fn answer_exists(&mut self, lines: &[Utf8Bytes]) -> Result<(), Failure> {
         let unihashes: Vec<Option<Sha256>> = lines.iter().map(|line| line.parse().ok()).collect();
         let valid: Vec<Sha256> = unihashes.iter().flatten().copied().collect();
+        let client = self.handler.client().await?;
         let mut exists = self
             .handler
             .cache
-            .unihashes_exist(client, &valid)
+            .unihashes_exist(&client, &valid)
             .await?
             .into_iter();
+        drop(client);
         for unihash in unihashes {
             let found = unihash.is_some() && exists.next().unwrap_or(false);
             let answer = Utf8Bytes::from_static(if found { "true" } else { "false" });
