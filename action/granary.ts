@@ -17,13 +17,19 @@ export interface Issued {
   readonly caches: readonly CacheInfo[];
 }
 
+/** Where the forge hands out ID tokens to the job. */
+export interface IdTokenSource {
+  readonly ACTIONS_ID_TOKEN_REQUEST_URL?: string | undefined;
+  readonly ACTIONS_ID_TOKEN_REQUEST_TOKEN?: string | undefined;
+}
+
 /** Requests an ID token from the forge for `audience`. */
 export async function requestIdToken(
   audience: string,
-  env: NodeJS.ProcessEnv = process.env,
+  source: IdTokenSource = process.env,
 ): Promise<string> {
-  const url = env["ACTIONS_ID_TOKEN_REQUEST_URL"];
-  const token = env["ACTIONS_ID_TOKEN_REQUEST_TOKEN"];
+  const url = source.ACTIONS_ID_TOKEN_REQUEST_URL;
+  const token = source.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
   if (url === undefined || token === undefined || url === "" || token === "") {
     throw new Error("the job can't request an ID token, grant it `id-token: write`");
   }
