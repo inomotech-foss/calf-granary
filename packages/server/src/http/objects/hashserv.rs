@@ -271,18 +271,21 @@ struct ReportReply<'a> {
 
 impl<'a> ReportReply<'a> {
     /// The reply for a recorded report, with or without its unihash.
-    fn new(method: &'a str, report: StoredReport, with_unihash: bool) -> Self {
+    ///
+    /// Without `detailed`, the reporter and the signature data are left
+    /// out, so anonymous readers of public caches don't learn them.
+    fn new(method: &'a str, report: StoredReport, with_unihash: bool, detailed: bool) -> Self {
         Self {
             method,
             taskhash: report.taskhash,
             outhash: report.outhash,
             created: report.created_at.to_rfc3339(),
-            owner: report.owner,
+            owner: report.owner.filter(|_| detailed),
             pn: report.pn,
             pv: report.pv,
             pr: report.pr,
             task: report.task,
-            outhash_siginfo: report.outhash_siginfo,
+            outhash_siginfo: report.outhash_siginfo.filter(|_| detailed),
             unihash: with_unihash.then_some(report.unihash),
         }
     }
@@ -415,7 +418,8 @@ impl Handler<'_> {
         let method = request.method.as_ref();
         if request.all {
             let row = self.cache.task(client, method, request.taskhash).await?;
-            return json(&row.map(|row| ReportReply::new(method, row, true)));
+            let detailed = self.logged_in();
+            return json(&row.map(|row| ReportReply::new(method, row, true, detailed)));
         }
         let unihash = self.cache.unihash(client, method, request.taskhash).await?;
         json(&unihash.map(|unihash| UnihashReply {
@@ -433,7 +437,8 @@ impl Handler<'_> {
     ) -> Result<Utf8Bytes, Failure> {
         let method = request.method.as_ref();
         let row = self.cache.outhash(client, method, request.outhash).await?;
-        json(&row.map(|row| ReportReply::new(method, row, request.with_unihash)))
+        let detailed = self.logged_in();
+        json(&row.map(|row| ReportReply::new(method, row, request.with_unihash, detailed)))
     }
 
     /// Answers `report`, recording it only for clients that may report.
@@ -536,6 +541,11 @@ impl Handler<'_> {
             username: &login.username,
             permissions: login.permissions(self.cache.is_public()),
         })
+    }
+
+    /// Whether the session logged in with a token that may read the cache.
+    fn logged_in(&self) -> bool {
+        self.login.as_ref().is_some_and(|login| login.can_read)
     }
 
     /// Fails unless the cache is public or the session may read it.

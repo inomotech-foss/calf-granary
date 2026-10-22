@@ -55,6 +55,8 @@ check(
 )
 full = main.get_taskhash(METHOD, T1, True)
 check(full["outhash"] == OUT and full["unihash"] == U1, "full task lookups")
+check(full["owner"] is not None, "logged in readers see the reporter")
+check(anonymous.get_taskhash(METHOD, T1, True)["owner"] is None, "anonymous readers don't")
 check(main.get_outhash(METHOD, OUT, T1)["unihash"] == U1, "output hash lookups")
 check(
     main.report_unihash_equiv(T3, METHOD, U3)["unihash"] == U3,
