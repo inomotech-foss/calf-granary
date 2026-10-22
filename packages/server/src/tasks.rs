@@ -18,7 +18,7 @@ use chrono::Utc;
 use deadpool_postgres::{Client, Pool, PoolError};
 use tracing::Instrument as _;
 
-pub(crate) use self::lease::{LEASE, renewing as renewing_lease};
+pub(crate) use self::lease::{LEASE, LeaseLost, renewing as renewing_lease};
 use self::metrics::TaskMetrics;
 use crate::cache::{CacheName, Caches, ExpireError};
 use crate::content::{CollectError, CollectStats, Content, Placement, TierError};

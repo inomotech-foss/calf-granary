@@ -162,11 +162,11 @@ impl Worker {
         };
 
         match result {
-            Some(Ok(())) => {
+            Some(Ok(Ok(()))) => {
                 complete_task().bind(&client, &task.id, &worker).await?;
                 tracing::info!(task = task.id, kind = task.kind, "completed a task");
             }
-            Some(Err(err)) => {
+            Some(Ok(Err(err))) => {
                 let delay = RETRY_DELAY.as_secs_f64() * f64::from(task.attempts);
                 fail_task()
                     .bind(
@@ -184,6 +184,9 @@ impl Worker {
                     attempt = task.attempts,
                     "task failed"
                 );
+            }
+            Some(Err(lost)) => {
+                tracing::warn!(error = &lost as &dyn Error, "stopped a task");
             }
             None => {
                 release_task().bind(&client, &task.id, &worker).await?;

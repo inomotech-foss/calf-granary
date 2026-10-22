@@ -11,7 +11,7 @@ use deadpool_postgres::{BuildError, PoolError};
 use crate::config::{Config, ConfigError};
 use crate::database::{DatabaseArgs, TlsError};
 use crate::migrations::{self, MigrationError};
-use crate::tasks::{LEASE, Runner, TaskError, TaskKind, WorkerId, renewing_lease};
+use crate::tasks::{LEASE, LeaseLost, Runner, TaskError, TaskKind, WorkerId, renewing_lease};
 
 /// Command-line arguments of the `prune` command.
 #[derive(Debug, Args)]
@@ -46,7 +46,7 @@ impl RunArgs {
             .one()
             .await?;
         let runner = Runner::new(pool, Arc::new(caches), Arc::new(content));
-        let result = renewing_lease(&client, id, &worker, runner.run(id, kind)).await;
+        let result = renewing_lease(&client, id, &worker, runner.run(id, kind)).await?;
         match result {
             Ok(()) => {
                 complete_task().bind(&client, &id, &worker.as_ref()).await?;
@@ -77,6 +77,9 @@ pub(crate) enum RunError {
     /// Connecting to Postgres failed.
     #[error("failed to connect to the database")]
     Connect(#[source] PoolError),
+    /// Another worker took over the task.
+    #[error(transparent)]
+    LeaseLost(#[from] LeaseLost),
     /// Recording the task failed.
     #[error("failed to record the task")]
     Database(#[from] tokio_postgres::Error),
