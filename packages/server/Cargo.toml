@@ -20,6 +20,8 @@ chrono = { workspace = true, features = ["clock"] }
 deadpool-postgres = { workspace = true, features = ["rt_tokio_1"] }
 fastcdc = { workspace = true }
 futures = { workspace = true }
+hyper = { workspace = true, features = ["http1", "server"] }
+hyper-util = { workspace = true, features = ["service", "tokio"] }
 jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
 object_store = { workspace = true, features = ["aws"] }
 opentelemetry-appender-tracing = { workspace = true }

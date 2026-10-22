@@ -3,6 +3,7 @@
 mod health;
 mod objects;
 mod observe;
+mod server;
 mod token;
 
 use std::borrow::Cow;
@@ -16,6 +17,7 @@ use base64::engine::general_purpose::STANDARD;
 use deadpool_postgres::Pool;
 
 use self::observe::RequestMetrics;
+pub(crate) use self::server::serve;
 pub(crate) use self::token::CacheDirectory;
 use crate::access::AccessLog;
 use crate::cache::Caches;

@@ -235,6 +235,8 @@ dependencies = [
  "deadpool-postgres",
  "fastcdc",
  "futures",
+ "hyper",
+ "hyper-util",
  "jsonwebtoken",
  "object_store",
  "opentelemetry",

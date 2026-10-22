@@ -68,23 +68,18 @@ impl ServeArgs {
         let access = Arc::new(AccessLog::default());
         let (stop, stopped) = oneshot::channel();
         let recorder = tokio::spawn(Arc::clone(&access).run(pool.clone(), stopped));
-        let served = axum::serve(
-            listener,
-            http::router(
-                pool,
-                Arc::new(caches),
-                Arc::new(content),
-                access,
-                key,
-                Arc::new(exchange),
-                directory,
-            ),
-        )
-        .with_graceful_shutdown(shutdown(terminate))
-        .await;
+        let router = http::router(
+            pool,
+            Arc::new(caches),
+            Arc::new(content),
+            access,
+            key,
+            Arc::new(exchange),
+            directory,
+        );
+        http::serve(listener, router, shutdown(terminate)).await;
         drop(stop);
-        recorder.await.map_err(ServeError::Recorder)?;
-        served.map_err(ServeError::Serve)
+        recorder.await.map_err(ServeError::Recorder)
     }
 }
 
@@ -115,9 +110,6 @@ pub(crate) enum ServeError {
     /// The task that records reads failed.
     #[error("the read recorder failed")]
     Recorder(#[source] JoinError),
-    /// Serving HTTP failed.
-    #[error("failed to serve HTTP")]
-    Serve(#[source] io::Error),
     /// Installing the signal handler failed.
     #[error("failed to install the SIGTERM handler")]
     Signal(#[source] io::Error),
