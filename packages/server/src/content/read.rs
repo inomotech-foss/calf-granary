@@ -3,6 +3,8 @@
 use std::io;
 use std::sync::Arc;
 
+use async_compression::Level;
+use async_compression::tokio::bufread::{ZstdDecoder, ZstdEncoder};
 use bytes::Bytes;
 use calf_granary_server_db::client::GenericClient;
 use calf_granary_server_db::queries::content::{blob_chunks, zstd_size};
@@ -12,8 +14,13 @@ use futures::{StreamExt as _, TryStreamExt as _};
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt as _};
 use tokio::task::{self, JoinError};
+use tokio_util::io::{ReaderStream, StreamReader};
 
 use super::{Content, zstd};
+
+/// The largest chunk that is converted in memory. Larger ones, which only
+/// whole content has, are converted as a stream.
+const MAX_BULK_SIZE: usize = 4 * 1024 * 1024;
 
 /// How a blob's bytes are delivered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,12 +58,23 @@ impl Part {
     /// Streams the chunk in its encoding.
     ///
     /// Chunks that are stored in the requested encoding are streamed as they
-    /// are. Others are fetched whole and converted, which only happens for
-    /// small chunks shared between chunked and whole content.
+    /// are. Small ones are converted whole, large ones as a stream.
     async fn open(self) -> Result<BoxStream<'static, Result<Bytes, ChunkError>>, ChunkError> {
         let object = self.store.get(&self.key).await.map_err(ChunkError::Store)?;
         if self.stored == self.encoding {
             return Ok(object.into_stream().map_err(ChunkError::Store).boxed());
+        }
+        if self.size > MAX_BULK_SIZE {
+            let reader = StreamReader::new(object.into_stream().map_err(io::Error::other));
+            let converted = match self.stored {
+                Encoding::Zstd => ReaderStream::new(ZstdDecoder::new(reader)).boxed(),
+                Encoding::Plain => ReaderStream::new(ZstdEncoder::with_quality(
+                    reader,
+                    Level::Precise(zstd::LEVEL),
+                ))
+                .boxed(),
+            };
+            return Ok(converted.map_err(ChunkError::Convert).boxed());
         }
         let stored = object.bytes().await.map_err(ChunkError::Store)?;
         let converted = task::spawn_blocking(move || match self.stored {

@@ -255,6 +255,36 @@ async fn serves_uploaded_store_paths() {
     assert!(server.stop().await.success(), "serve stops cleanly");
 }
 
+#[tokio::test]
+#[ignore = "needs Postgres and object storage"]
+async fn serves_nars_that_a_files_cache_stored_whole() {
+    let stack = Stack::new(&format!("{CACHES}\n[caches.files]\nstore = \"test\"\n")).await;
+    stack.write("main.key", MAIN_KEY);
+    stack.write("pr.key", PR_KEY);
+    stack.migrate().await;
+    let server = stack.serve().await;
+    let token = stack.token(&["files", "nix-main"]).await;
+    let nar: Vec<u8> = nar().repeat(6);
+    assert_eq!(
+        put_basic(&server, &token, "files/nar", nar.clone()).await,
+        StatusCode::CREATED,
+        "the files cache stores the content whole"
+    );
+    assert_eq!(
+        upload(&server, Some(&token), &info(&nar, &sri(&nar)), nar.clone()).await,
+        StatusCode::CREATED,
+        "the store path reuses the blob"
+    );
+    let (_, narinfo) = text(&server, &format!("nix-main/{HASH}.narinfo")).await;
+    let file = get_bytes(&server, &format!("nix-main/{}", field(&narinfo, "URL"))).await;
+    assert_eq!(
+        zstd::decode_all(file.as_slice()).unwrap(),
+        nar,
+        "the whole content is compressed on the fly"
+    );
+    assert!(server.stop().await.success(), "serve stops cleanly");
+}
+
 async fn head_status(server: &Server, path: &str) -> StatusCode {
     server
         .http()

@@ -6,7 +6,7 @@ use std::io;
 use zstd::bulk::{Compressor, Decompressor};
 
 /// The zstd level of new chunks.
-const LEVEL: i32 = 8;
+pub(super) const LEVEL: i32 = 8;
 
 thread_local! {
     /// The compression context of this thread.
