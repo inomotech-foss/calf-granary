@@ -1,6 +1,6 @@
 //! Asking the local Nix installation about store paths.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, btree_map};
 use std::io;
 use std::process::Stdio;
 
@@ -118,26 +118,92 @@ impl Systems {
     }
 }
 
-/// Returns the store paths and everything they reference, by path.
-pub(crate) async fn closure(paths: &[String]) -> Result<BTreeMap<String, PathInfo>, NixError> {
-    let output = Command::new("nix")
-        .args([
-            "--extra-experimental-features",
-            "nix-command",
-            "path-info",
-            "--json",
-            "--recursive",
-            "--",
-        ])
-        .args(paths)
-        .stderr(Stdio::inherit())
-        .output()
-        .await
-        .map_err(NixError::Spawn)?;
-    if !output.status.success() {
-        return Err(NixError::Failed);
+/// Store paths and what Nix knows about them, by path.
+#[derive(Debug, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct Closure(BTreeMap<String, PathInfo>);
+
+impl Closure {
+    /// Returns the store paths and everything they reference.
+    pub(crate) async fn of(paths: &[String]) -> Result<Self, NixError> {
+        let output = Command::new("nix")
+            .args([
+                "--extra-experimental-features",
+                "nix-command",
+                "path-info",
+                "--json",
+                "--recursive",
+                "--",
+            ])
+            .args(paths)
+            .stderr(Stdio::inherit())
+            .output()
+            .await
+            .map_err(NixError::Spawn)?;
+        if !output.status.success() {
+            return Err(NixError::Failed);
+        }
+        serde_json::from_slice(&output.stdout).map_err(NixError::Parse)
     }
-    serde_json::from_slice(&output.stdout).map_err(NixError::Parse)
+
+    /// The number of store paths.
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// The store paths and their info.
+    pub(crate) fn iter(&self) -> btree_map::Iter<'_, String, PathInfo> {
+        self.0.iter()
+    }
+
+    /// Groups the selected paths into rounds. Each path comes after the
+    /// selected paths that it references, so a cache never holds a path
+    /// without its references.
+    pub(crate) fn rounds(&self, selected: impl Fn(&str) -> bool) -> Vec<Vec<(&str, &PathInfo)>> {
+        let mut waiting: HashMap<&str, usize> = HashMap::new();
+        let mut dependents: HashMap<&str, Vec<&str>> = HashMap::new();
+        for (path, info) in self.iter().filter(|(path, _)| selected(path)) {
+            let references = info
+                .references
+                .iter()
+                .filter(|reference| *reference != path && selected(reference))
+                .filter(|reference| self.0.contains_key(*reference));
+            let mut count = 0usize;
+            for reference in references {
+                dependents.entry(reference).or_default().push(path);
+                count = count.saturating_add(1);
+            }
+            waiting.insert(path, count);
+        }
+        let mut round: Vec<&str> = waiting
+            .iter()
+            .filter(|(_, count)| **count == 0)
+            .map(|(path, _)| *path)
+            .collect();
+        let mut rounds = Vec::new();
+        while !round.is_empty() {
+            let mut next = Vec::new();
+            for path in &round {
+                for dependent in dependents.get(path).into_iter().flatten() {
+                    if let Some(count) = waiting.get_mut(dependent) {
+                        *count = count.saturating_sub(1);
+                        if *count == 0 {
+                            next.push(*dependent);
+                        }
+                    }
+                }
+            }
+            rounds.push(
+                round
+                    .into_iter()
+                    .filter_map(|path| self.0.get_key_value(path))
+                    .map(|(path, info)| (path.as_str(), info))
+                    .collect(),
+            );
+            round = next;
+        }
+        rounds
+    }
 }
 
 /// Starts writing the NAR of a store path to the child's stdout.
@@ -188,6 +254,34 @@ mod tests {
         let info = infos.values().next().unwrap();
         assert_eq!(info.nar_size, 113_096, "the NAR size");
         assert_eq!(info.references.len(), 1, "the references");
+    }
+
+    #[test]
+    fn uploads_references_first() {
+        let info = |references: &[&str]| {
+            serde_json::json!({
+                "narHash": "sha256-7MZnIH9eNsFHNb8PnARyBCoAG3LUDzeNeskUBTxjZ7A=",
+                "narSize": 1,
+                "references": references,
+            })
+        };
+        let closure: Closure = serde_json::from_value(serde_json::json!({
+            "app": info(&["app", "lib", "libc"]),
+            "lib": info(&["libc"]),
+            "libc": info(&[]),
+            "cached": info(&["libc"]),
+        }))
+        .unwrap();
+        let rounds: Vec<Vec<&str>> = closure
+            .rounds(|path| path != "cached")
+            .into_iter()
+            .map(|round| round.into_iter().map(|(path, _)| path).collect())
+            .collect();
+        assert_eq!(
+            rounds,
+            [vec!["libc"], vec!["lib"], vec!["app"]],
+            "references come first, unselected paths are left out"
+        );
     }
 
     #[test]
