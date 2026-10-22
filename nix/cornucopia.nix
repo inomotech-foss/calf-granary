@@ -38,11 +38,7 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    ephemeris.files."${cfg.destination}/Cargo.toml".document.structured = lib.mkForce {
-      format = "toml";
-      ownership.selected.owned = [ ];
-      value = { };
-    };
+    ephemeris.rust.workspace.members.${cfg.name}.generated = true;
 
     perSystem =
       {
