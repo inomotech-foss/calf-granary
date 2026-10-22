@@ -112,6 +112,7 @@ impl YoctoCommand {
             let keys: Vec<&str> = batch.iter().map(|(key, _)| key.as_str()).collect();
             let answer: Missing = http
                 .post(missing_url.clone())
+                .bearer_auth(args.target.token())
                 .json(&MissingRequest { keys: &keys })
                 .send()
                 .await

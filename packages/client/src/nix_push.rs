@@ -93,6 +93,7 @@ impl PushArgs {
         for batch in hashes.chunks(MISSING_BATCH) {
             let answer: Missing = http
                 .post(missing_url.clone())
+                .bearer_auth(self.target.token())
                 .json(&MissingRequest { hashes: batch })
                 .send()
                 .await
