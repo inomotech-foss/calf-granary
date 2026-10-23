@@ -1,7 +1,8 @@
 //! End-to-end tests against Postgres and S3-compatible object storage.
 //!
-//! The tests are ignored by default. With `nix run .#dev` running, run them
-//! with `source .dev/env && cargo nextest run --run-ignored only`.
+//! The tests are ignored by default. Start the stack with `ephemeris-up` in
+//! the dev shell, run `source .ephemeris/services/granary/env`, then run
+//! `cargo nextest run --run-ignored only`.
 
 #[cfg(test)]
 mod action;
