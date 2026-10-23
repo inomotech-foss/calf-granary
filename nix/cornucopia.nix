@@ -1,9 +1,4 @@
-{
-  config,
-  lib,
-  self,
-  ...
-}:
+{ config, lib, ... }:
 let
   cfg = config.granary.ephemeris.cornucopia;
 in
@@ -38,7 +33,13 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    ephemeris.rust.workspace.members.${cfg.name}.generated = true;
+    ephemeris.generated.db = {
+      outputs = [ cfg.destination ];
+      inputs = [
+        cfg.migrations
+        cfg.queries
+      ];
+    };
 
     perSystem =
       {
@@ -52,12 +53,15 @@ in
           name = "cornucopia-generate";
           runtimeInputs = [
             inputs'.cornucopia.packages.cornucopia
+            pkgs.coreutils
+            pkgs.git
             pkgs.postgresql_18
             config.ephemeris.rust.rustfmt
           ];
           text = ''
-            root=$(realpath "$1")
-            destination=$(realpath -m "$2")
+            root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+            destination=$(realpath -m "$1/${cfg.destination}")
+            mkdir -p "$(dirname "$destination")"
             work=$(mktemp -d)
             trap 'pg_ctl --pgdata "$work/data" --mode immediate stop >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
 
@@ -99,34 +103,7 @@ in
         };
       in
       {
-        apps.regen-db = {
-          type = "app";
-          program = lib.getExe (
-            pkgs.writeShellApplication {
-              name = "regen-db";
-              runtimeInputs = [ generate ];
-              text = ''
-                root=$(git rev-parse --show-toplevel)
-                cornucopia-generate "$root" "$root/${cfg.destination}"
-              '';
-            }
-          );
-          meta.description = "Regenerate the Postgres bindings";
-        };
-
-        checks.db-bindings =
-          pkgs.runCommand "db-bindings"
-            {
-              nativeBuildInputs = [
-                generate
-                pkgs.diffutils
-              ];
-            }
-            ''
-              cornucopia-generate ${self} generated
-              diff --recursive ${self}/${cfg.destination} generated
-              touch "$out"
-            '';
+        ephemeris.generated.db.program = generate;
       };
   };
 }

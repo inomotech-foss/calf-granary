@@ -4,9 +4,6 @@ on:
 concurrency:
   cancel-in-progress: true
   group: pull_request-${{ forge.ref }}
-permissions:
-  contents: read
-  pull-requests: write
 jobs:
   comment-end:
     name: Report PR review results

@@ -37,13 +37,5 @@
           "yocto"
         ];
       };
-
-      perSystem =
-        { config, lib, ... }:
-        {
-          checks = lib.mapAttrs' (name: lib.nameValuePair "package-${name}") {
-            inherit (config.packages) calf-granary-client calf-granary-server;
-          };
-        };
     };
 }
