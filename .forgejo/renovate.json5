@@ -10,6 +10,7 @@
     ".forgejo/renovate.json5",
     ".forgejo/workflows/dependency-updates.yaml",
     ".forgejo/workflows/pull-request.yaml",
+    ".forgejo/workflows/repository.yaml",
     ".gitignore",
     "LICENSE",
     "README.md",
@@ -60,27 +61,32 @@
       matchDepNames: ["ephemeris"],
       matchManagers: ["nix"],
       postUpgradeTasks: {
-        commands: ["nix run .#ephemeris -- files apply"],
+        commands: [
+          "nix run .#ephemeris -- files apply",
+          "nix run .#ephemeris-generate",
+        ],
         executionMode: "update",
         fileFilters: ["**/*"],
       },
     },
     {
-      description: "Refresh the vendored pnpm dependencies after npm updates",
-      matchManagers: ["npm"],
-      postUpgradeTasks: {
-        commands: ["nix run .#ephemeris-typescript-refresh"],
-        executionMode: "update",
-        fileFilters: ["**/package.json", "**/pnpm-lock.yaml"],
-      },
-    },
-    {
-      description: "Refresh the vendored pnpm dependencies after Nix updates",
-      groupName: null,
+      description: "Reconcile Ephemeris after other flake input updates",
       matchDepNames: ["!ephemeris"],
       matchManagers: ["nix"],
       postUpgradeTasks: {
-        commands: ["nix run .#ephemeris-typescript-refresh"],
+        commands: [
+          "nix run .#ephemeris -- files apply",
+          "nix run .#ephemeris-generate",
+        ],
+        executionMode: "update",
+        fileFilters: ["**/*"],
+      },
+    },
+    {
+      description: "Regenerate the lockfile and the dependency hash after npm updates",
+      matchManagers: ["npm"],
+      postUpgradeTasks: {
+        commands: ["nix run .#ephemeris-generate"],
         executionMode: "update",
         fileFilters: ["**/package.json", "**/pnpm-lock.yaml"],
       },

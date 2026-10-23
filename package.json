@@ -20,10 +20,6 @@
     "dependenciesHash": "sha256-0Nf+71aRZBon8ZjbpohWxYcxEixMcABpbCz6/n7p0UU="
   },
   "packageManager": "pnpm@12.9.0",
-  "prettier": {},
-  "publishConfig": {
-    "registry": "https://codeberg.org/api/packages/inomotech/npm/"
-  },
   "repository": {
     "type": "git",
     "url": "https://codeberg.org/inomotech/calf-granary"
