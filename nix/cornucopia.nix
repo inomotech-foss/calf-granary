@@ -88,6 +88,7 @@ in
             description = "${cfg.description}"
             categories = ["database"]
             keywords = [${lib.concatMapStringsSep ", " builtins.toJSON cfg.keywords}]
+            publish = false
             license = { workspace = true }
             readme = { workspace = true }
             repository = { workspace = true }
