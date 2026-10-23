@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 
@@ -12,7 +16,10 @@ async function serve(
   const server = createServer(handler);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
-  return { url: `http://127.0.0.1:${String(port)}`, close: () => server.close() };
+  return {
+    url: `http://127.0.0.1:${String(port)}`,
+    close: () => server.close(),
+  };
 }
 
 test("ID tokens are requested for the audience", async () => {
@@ -48,7 +55,15 @@ test("ID tokens are exchanged at /token", async () => {
         token: "granary-token",
         expires_at: 1,
         tier: "pr",
-        caches: [{ name: "sstate-pr", protocol: "files", role: "sstate", url: "u", access: "write" }],
+        caches: [
+          {
+            name: "sstate-pr",
+            protocol: "files",
+            role: "sstate",
+            url: "u",
+            access: "write",
+          },
+        ],
       }),
     );
   });

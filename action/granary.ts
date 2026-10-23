@@ -32,11 +32,15 @@ export async function requestIdToken(
   const url = source.ACTIONS_ID_TOKEN_REQUEST_URL;
   const token = source.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
   if (url === undefined || token === undefined || url === "" || token === "") {
-    throw new Error("the job can't request an ID token, grant it `id-token: write`");
+    throw new Error(
+      "the job can't request an ID token, grant it `id-token: write`",
+    );
   }
   const request = new URL(url);
   request.searchParams.set("audience", audience);
-  const response = await fetch(request, { headers: { authorization: `Bearer ${token}` } });
+  const response = await fetch(request, {
+    headers: { authorization: `Bearer ${token}` },
+  });
   if (!response.ok) {
     throw new Error(`the forge refused an ID token with ${response.status}`);
   }
@@ -48,7 +52,10 @@ export async function requestIdToken(
 }
 
 /** Exchanges an ID token for a granary token. */
-export async function exchange(server: string, idToken: string): Promise<Issued> {
+export async function exchange(
+  server: string,
+  idToken: string,
+): Promise<Issued> {
   const response = await fetch(new URL("token", withSlash(server)), {
     method: "POST",
     headers: { authorization: `Bearer ${idToken}` },
@@ -67,10 +74,16 @@ export async function exchange(server: string, idToken: string): Promise<Issued>
 export async function publicCaches(server: string): Promise<CacheInfo[]> {
   const response = await fetch(new URL("_api/caches", withSlash(server)));
   if (!response.ok) {
-    throw new Error(`granary refused to list its caches with ${response.status}`);
+    throw new Error(
+      `granary refused to list its caches with ${response.status}`,
+    );
   }
   const body: unknown = await response.json();
-  if (!isRecord(body) || !Array.isArray(body["caches"]) || !body["caches"].every(isCacheInfo)) {
+  if (
+    !isRecord(body) ||
+    !Array.isArray(body["caches"]) ||
+    !body["caches"].every(isCacheInfo)
+  ) {
     throw new Error("granary answered with an unknown format");
   }
   return body["caches"];
@@ -102,7 +115,8 @@ function isCacheInfo(value: unknown): value is CacheInfo {
     typeof value["role"] === "string" &&
     typeof value["url"] === "string" &&
     ["write", "read"].includes(String(value["access"])) &&
-    (value["public_key"] === undefined || typeof value["public_key"] === "string")
+    (value["public_key"] === undefined ||
+      typeof value["public_key"] === "string")
   );
 }
 

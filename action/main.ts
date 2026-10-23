@@ -5,7 +5,13 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { bitbakeConfig, netrc, nixConfig, replaceBlock } from "./config.ts";
-import { type CacheInfo, exchange, type Issued, publicCaches, requestIdToken } from "./granary.ts";
+import {
+  type CacheInfo,
+  exchange,
+  type Issued,
+  publicCaches,
+  requestIdToken,
+} from "./granary.ts";
 import { output } from "./process.ts";
 import {
   booleanInput,
@@ -49,13 +55,17 @@ async function main(): Promise<void> {
     saveState("caches", JSON.stringify(issued.caches));
     setOutput("tier", issued.tier);
   }
-  info(`granary tier ${issued?.tier ?? "anonymous"}: ${caches.map((cache) => cache.name).join(", ")}`);
+  info(
+    `granary tier ${issued?.tier ?? "anonymous"}: ${caches.map((cache) => cache.name).join(", ")}`,
+  );
 
   const temp = process.env["RUNNER_TEMP"] ?? "/tmp";
   let netrcFile: string | undefined;
   if (issued !== undefined) {
     netrcFile = join(temp, "granary.netrc");
-    writeFileSync(netrcFile, netrc([new URL(server).hostname], issued.token), { mode: 0o600 });
+    writeFileSync(netrcFile, netrc([new URL(server).hostname], issued.token), {
+      mode: 0o600,
+    });
     saveState("netrc", netrcFile);
   }
   const nixCache = caches.find((cache) => cache.protocol === "nix");
@@ -66,21 +76,33 @@ async function main(): Promise<void> {
       saveState("store-paths", snapshot);
     }
     const existing = process.env["NIX_CONFIG"] ?? "";
-    exportVariable("NIX_CONFIG", `${existing}\n${nixConfig(nixCache, netrcFile)}`.trim());
+    exportVariable(
+      "NIX_CONFIG",
+      `${existing}\n${nixConfig(nixCache, netrcFile)}`.trim(),
+    );
     info(`substituting from ${nixCache.url}`);
   }
 
   const bitbakeFile = input("bitbake-conf");
   if (bitbakeFile !== "") {
-    writeFileSync(bitbakeFile, replaceBlock(readIfExists(bitbakeFile), bitbakeConfig(caches)));
+    writeFileSync(
+      bitbakeFile,
+      replaceBlock(readIfExists(bitbakeFile), bitbakeConfig(caches)),
+    );
     info(`wrote the BitBake settings to ${bitbakeFile}`);
     if (issued !== undefined) {
-      const hashserv = caches.filter((cache) => cache.protocol === "hashserv").map((cache) => cache.url);
+      const hashserv = caches
+        .filter((cache) => cache.protocol === "hashserv")
+        .map((cache) => cache.url);
       const machines = [new URL(server).hostname, ...hashserv];
       const homeNetrc = join(homedir(), ".netrc");
-      writeFileSync(homeNetrc, replaceBlock(readIfExists(homeNetrc), netrc(machines, issued.token)), {
-        mode: 0o600,
-      });
+      writeFileSync(
+        homeNetrc,
+        replaceBlock(readIfExists(homeNetrc), netrc(machines, issued.token)),
+        {
+          mode: 0o600,
+        },
+      );
       chmodSync(homeNetrc, 0o600);
       saveState("home-netrc", homeNetrc);
     }
@@ -89,7 +111,9 @@ async function main(): Promise<void> {
 
 /** Orders caches so that BitBake and Nix use the ones the job writes to. */
 function writableFirst(caches: readonly CacheInfo[]): CacheInfo[] {
-  return [...caches].sort((a, b) => Number(b.access === "write") - Number(a.access === "write"));
+  return [...caches].sort(
+    (a, b) => Number(b.access === "write") - Number(a.access === "write"),
+  );
 }
 
 /** Reads a file, or returns an empty string if there is none. */

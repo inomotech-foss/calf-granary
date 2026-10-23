@@ -5,9 +5,27 @@ import { bitbakeConfig, netrc, nixConfig, replaceBlock } from "./config.ts";
 import type { CacheInfo } from "./granary.ts";
 
 const caches: CacheInfo[] = [
-  { name: "sstate-pr", protocol: "files", role: "sstate", url: "https://g.example/sstate-pr", access: "write" },
-  { name: "downloads", protocol: "files", role: "downloads", url: "https://g.example/downloads", access: "write" },
-  { name: "hash-pr", protocol: "hashserv", role: "hashserv", url: "wss://g.example/_hashserv/hash-pr", access: "write" },
+  {
+    name: "sstate-pr",
+    protocol: "files",
+    role: "sstate",
+    url: "https://g.example/sstate-pr",
+    access: "write",
+  },
+  {
+    name: "downloads",
+    protocol: "files",
+    role: "downloads",
+    url: "https://g.example/downloads",
+    access: "write",
+  },
+  {
+    name: "hash-pr",
+    protocol: "hashserv",
+    role: "hashserv",
+    url: "wss://g.example/_hashserv/hash-pr",
+    access: "write",
+  },
   {
     name: "nix-pr",
     protocol: "nix",
@@ -20,16 +38,25 @@ const caches: CacheInfo[] = [
 
 test("BitBake reads sstate, downloads and hash equivalence from granary", () => {
   const config = bitbakeConfig(caches);
-  assert.match(config, /^SSTATE_MIRRORS \?= "file:\/\/\.\* https:\/\/g\.example\/sstate-pr\/PATH;downloadfilename=PATH"$/m);
-  assert.match(config, /^ {4}git:\/\/\.\*\/\.\* https:\/\/g\.example\/downloads\/ \\n \\$/m);
+  assert.match(
+    config,
+    /^SSTATE_MIRRORS \?= "file:\/\/\.\* https:\/\/g\.example\/sstate-pr\/PATH;downloadfilename=PATH"$/m,
+  );
+  assert.match(
+    config,
+    /^ {4}git:\/\/\.\*\/\.\* https:\/\/g\.example\/downloads\/ \\n \\$/m,
+  );
   assert.match(config, /^BB_GENERATE_MIRROR_TARBALLS = "1"$/m);
-  assert.match(config, /^BB_HASHSERVE = "wss:\/\/g\.example\/_hashserv\/hash-pr"$/m);
+  assert.match(
+    config,
+    /^BB_HASHSERVE = "wss:\/\/g\.example\/_hashserv\/hash-pr"$/m,
+  );
   assert.doesNotMatch(config, /PASSWORD/);
 });
 
 test("the settings replace the ones from earlier runs", () => {
-  const first = replaceBlock("BB_NUMBER_THREADS = \"4\"", "A = \"1\"\n");
-  const second = replaceBlock(first, "A = \"2\"\n");
+  const first = replaceBlock('BB_NUMBER_THREADS = "4"', 'A = "1"\n');
+  const second = replaceBlock(first, 'A = "2"\n');
   assert.equal(
     second,
     'BB_NUMBER_THREADS = "4"\n# Begin calf-granary settings\nA = "2"\n# End calf-granary settings\n',

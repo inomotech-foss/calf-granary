@@ -22,9 +22,14 @@ export async function run(
 }
 
 /** Runs a program and returns what it printed. */
-export async function output(program: string, args: readonly string[]): Promise<string> {
+export async function output(
+  program: string,
+  args: readonly string[],
+): Promise<string> {
   return await new Promise<string>((resolve, reject) => {
-    const child = spawn(program, args, { stdio: ["ignore", "pipe", "inherit"] });
+    const child = spawn(program, args, {
+      stdio: ["ignore", "pipe", "inherit"],
+    });
     const chunks: Buffer[] = [];
     child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
     child.on("error", reject);

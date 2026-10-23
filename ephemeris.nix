@@ -18,8 +18,7 @@
     typescript = {
       enable = true;
       pnpm.version = 11;
-      dependencies.hash = "sha256-2s1y9ddE+NvxCxv5HcRS1M7G/3TMafmg6SKzwPMsPNs=";
-      formatter.enable = false;
+      dependencies.hash = "sha256-kb3JSodjfCXITftZb4/IDKUFFGRsdKeqAREE2NYAb2E=";
     };
     images.calf-granary-server = {
       package = "calf-granary-server";
@@ -36,4 +35,6 @@
     # PN is the recipe name in BitBake's hash equivalence protocol.
     typos.default.extendWords.pn = "pn";
   };
+
+  perSystem.treefmt.settings.formatter.yamlfmt.excludes = [ "pnpm-lock.yaml" ];
 }

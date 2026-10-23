@@ -4,12 +4,18 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
 
 /** Reads an action input, or an empty string when it isn't set. */
-export function input(name: string, env: NodeJS.ProcessEnv = process.env): string {
+export function input(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   return env[`INPUT_${name.replaceAll(" ", "_").toUpperCase()}`]?.trim() ?? "";
 }
 
 /** Reads an input that must be set. */
-export function requiredInput(name: string, env: NodeJS.ProcessEnv = process.env): string {
+export function requiredInput(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   const value = input(name, env);
   if (value === "") {
     throw new Error(`the input ${name} is required`);
@@ -18,7 +24,10 @@ export function requiredInput(name: string, env: NodeJS.ProcessEnv = process.env
 }
 
 /** Reads a boolean input. */
-export function booleanInput(name: string, env: NodeJS.ProcessEnv = process.env): boolean {
+export function booleanInput(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
   return ["true", "yes", "1"].includes(input(name, env).toLowerCase());
 }
 
@@ -53,7 +62,10 @@ export function saveState(name: string, value: string): void {
 }
 
 /** Reads a value that the main step kept. */
-export function state(name: string, env: NodeJS.ProcessEnv = process.env): string {
+export function state(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   return env[`STATE_${name}`] ?? "";
 }
 
@@ -80,5 +92,8 @@ export function fail(message: string): void {
 
 /** Escapes a message for a workflow command. */
 function escape(message: string): string {
-  return message.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+  return message
+    .replaceAll("%", "%25")
+    .replaceAll("\r", "%0D")
+    .replaceAll("\n", "%0A");
 }

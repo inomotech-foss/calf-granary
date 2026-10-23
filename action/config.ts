@@ -20,7 +20,9 @@ export function nixConfig(cache: CacheInfo, netrcFile?: string): string {
 
 /** Netrc entries that send the token to each machine. */
 export function netrc(machines: readonly string[], token: string): string {
-  return machines.map((machine) => `machine ${machine}\nlogin granary\npassword ${token}\n`).join("");
+  return machines
+    .map((machine) => `machine ${machine}\nlogin granary\npassword ${token}\n`)
+    .join("");
 }
 
 /** Replaces the action's block in a configuration file's text, or removes it
@@ -31,7 +33,8 @@ export function replaceBlock(text: string, block?: string): string {
   const rest =
     start === -1 || end === -1
       ? text
-      : text.slice(0, start) + text.slice(end + BLOCK_END.length).replace(/^\n/, "");
+      : text.slice(0, start) +
+        text.slice(end + BLOCK_END.length).replace(/^\n/, "");
   if (block === undefined) {
     return rest;
   }
@@ -43,22 +46,31 @@ export function replaceBlock(text: string, block?: string): string {
  * netrc, so they stay out of the build directory and the parse cache. */
 export function bitbakeConfig(caches: readonly CacheInfo[]): string {
   const lines: string[] = [];
-  const sstate = caches.find((cache) => cache.protocol === "files" && cache.role === "sstate");
+  const sstate = caches.find(
+    (cache) => cache.protocol === "files" && cache.role === "sstate",
+  );
   if (sstate !== undefined) {
-    lines.push(`SSTATE_MIRRORS ?= "file://.* ${sstate.url}/PATH;downloadfilename=PATH"`);
+    lines.push(
+      `SSTATE_MIRRORS ?= "file://.* ${sstate.url}/PATH;downloadfilename=PATH"`,
+    );
   }
   const downloads = caches.find(
     (cache) => cache.protocol === "files" && cache.role === "downloads",
   );
   if (downloads !== undefined) {
     const schemes = ["git", "gitsm", "https?", "ftp", "npm", "crate"];
-    const mirrors = schemes.map((scheme) => `    ${scheme}://.*/.* ${downloads.url}/ \\n \\`);
+    const mirrors = schemes.map(
+      (scheme) => `    ${scheme}://.*/.* ${downloads.url}/ \\n \\`,
+    );
     lines.push(`PREMIRRORS:prepend = "\\`, ...mirrors, `"`);
     lines.push(`BB_GENERATE_MIRROR_TARBALLS = "1"`);
   }
   const hashserv = caches.find((cache) => cache.protocol === "hashserv");
   if (hashserv !== undefined) {
-    lines.push(`BB_SIGNATURE_HANDLER = "OEEquivHash"`, `BB_HASHSERVE = "${hashserv.url}"`);
+    lines.push(
+      `BB_SIGNATURE_HANDLER = "OEEquivHash"`,
+      `BB_HASHSERVE = "${hashserv.url}"`,
+    );
   }
   return `${lines.join("\n")}\n`;
 }
