@@ -13,11 +13,15 @@ rec {
   python = pkgs.python3.withPackages (packages: [ packages.websockets ]);
 
   # Clients that the end-to-end tests drive the server with.
-  clientExports = lib.concatStringsSep "\n" [
-    "export BITBAKE_ROOT=${bitbake}"
-    "export BITBAKE_PYTHON=${lib.getExe python}"
-    "export GRANARY_NODE=${lib.getExe pkgs.nodejs_24}"
-  ];
+  clientEnvironment = {
+    BITBAKE_ROOT = "${bitbake}";
+    BITBAKE_PYTHON = lib.getExe python;
+    GRANARY_NODE = lib.getExe pkgs.nodejs_24;
+  };
+
+  clientExports = lib.concatStringsSep "\n" (
+    lib.mapAttrsToList (name: value: "export ${name}=${value}") clientEnvironment
+  );
 
   # A CA and a certificate for 127.0.0.1, created once per directory.
   postgresTls = pkgs.writeShellScript "granary-postgres-tls" ''

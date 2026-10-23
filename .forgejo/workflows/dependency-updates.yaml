@@ -30,7 +30,7 @@ jobs:
         run: nix run .#ephemeris-renovate
         env:
           LOG_LEVEL: info
-          RENOVATE_ALLOWED_COMMANDS: '["^nix run \\.#ephemeris -- files apply$","^nix run \\.#ephemeris-typescript-hash$"]'
+          RENOVATE_ALLOWED_COMMANDS: '["^nix run \\.#ephemeris -- files apply$","^nix run \\.#ephemeris-typescript-refresh$"]'
           RENOVATE_CACHE_DIR: .renovate-cache/
           RENOVATE_CONFIG: '{"allowCustomCrateRegistries":true,"configFileNames":[".forgejo/renovate.json5"],"onboarding":false}'
           RENOVATE_ENDPOINT: ${{ forge.api_url }}

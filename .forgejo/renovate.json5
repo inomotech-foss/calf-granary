@@ -66,12 +66,23 @@
       },
     },
     {
-      description: "Refresh the vendored pnpm dependency hash after npm updates",
+      description: "Refresh the vendored pnpm dependencies after npm updates",
       matchManagers: ["npm"],
       postUpgradeTasks: {
-        commands: ["nix run .#ephemeris-typescript-hash"],
+        commands: ["nix run .#ephemeris-typescript-refresh"],
         executionMode: "update",
-        fileFilters: ["**/*.nix"],
+        fileFilters: ["**/package.json", "**/pnpm-lock.yaml"],
+      },
+    },
+    {
+      description: "Refresh the vendored pnpm dependencies after Nix updates",
+      groupName: null,
+      matchDepNames: ["!ephemeris"],
+      matchManagers: ["nix"],
+      postUpgradeTasks: {
+        commands: ["nix run .#ephemeris-typescript-refresh"],
+        executionMode: "update",
+        fileFilters: ["**/package.json", "**/pnpm-lock.yaml"],
       },
     },
   ],

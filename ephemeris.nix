@@ -1,4 +1,4 @@
-{ lib, withSystem, ... }:
+{ lib, ... }:
 
 {
   ephemeris = {
@@ -15,15 +15,10 @@
         targets = [ "x86_64-unknown-linux-musl" ];
       });
     };
-    typescript = {
-      enable = true;
-      pnpm.version = 11;
-      dependencies.hash = "sha256-kb3JSodjfCXITftZb4/IDKUFFGRsdKeqAREE2NYAb2E=";
-    };
+    typescript.enable = true;
     images.calf-granary-server = {
       package = "calf-granary-server";
       platforms = [ "linux/amd64" ];
-      contents = [ (withSystem "x86_64-linux" ({ pkgs, ... }: pkgs.cacert)) ];
       user = {
         name = "nobody";
         uid = 65534;
@@ -36,5 +31,9 @@
     typos.default.extendWords.pn = "pn";
   };
 
-  perSystem.treefmt.settings.formatter.yamlfmt.excludes = [ "pnpm-lock.yaml" ];
+  perSystem =
+    { pkgs, ... }:
+    {
+      ephemeris.images.calf-granary-server.contents = [ pkgs.cacert ];
+    };
 }

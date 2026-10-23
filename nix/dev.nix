@@ -46,15 +46,16 @@ let
   };
 in
 {
-  ephemeris.garage = {
-    enable = true;
-    buckets = lib.mapAttrsToList (_: store: store.bucket) stores ++ [ "granary-test" ];
-  };
-
-  ephemeris.postgres = {
-    enable = true;
-    port = 15432;
-    tls = true;
+  ephemeris.services = {
+    garage = {
+      enable = true;
+      buckets = lib.mapAttrsToList (_: store: store.bucket) stores ++ [ "granary-test" ];
+    };
+    postgres = {
+      enable = true;
+      port = 15432;
+      tls = true;
+    };
   };
 
   perSystem =
@@ -63,7 +64,10 @@ in
       server = lib.getExe' config.packages.calf-granary-server "calf-granary-server";
       services = import ./services.nix { inherit lib pkgs; };
       granaryConfig = (pkgs.formats.toml { }).generate "granary-dev.toml" { inherit stores caches; };
-      env = "source .ephemeris/services/granary/env &&";
+      env = lib.concatMapStrings (process: ". .ephemeris/services/${process}/exports.env && ") [
+        "granary"
+        "garage-setup"
+      ];
 
       setup = pkgs.writeShellApplication {
         name = "granary-dev-setup";
@@ -73,7 +77,7 @@ in
           pkgs.nix
         ];
         text = ''
-          state=$PWD/.ephemeris/services/granary
+          state=$(realpath "$EPHEMERIS_SERVICE_STATE")
           umask 077
           secret="$state/token-secret"
           if [ ! -f "$secret" ]; then
@@ -89,29 +93,28 @@ in
           done
           sed "s|@state@|$state|g" ${granaryConfig} >"$state/config.toml"
 
-          cat >"$state/env" <<EOF
-          export GRANARY_CONFIG=$state/config.toml
-          export GRANARY_DATABASE_URL="host=127.0.0.1 port=15432 user=postgres dbname=postgres sslmode=require"
-          export GRANARY_DATABASE_CA=$PWD/.ephemeris/services/postgres/tls/ca.crt
-          export GRANARY_LISTEN=127.0.0.1:18080
-          export GRANARY_TOKEN_SECRET=$(cat "$secret")
-          set -a
-          source $PWD/.ephemeris/services/garage/credentials
-          set +a
-          export AWS_ALLOW_HTTP=true
-          ${services.clientExports}
+          cat >"$state/exports.env" <<EOF
+          GRANARY_DATABASE_CA=$(realpath "$PGSSLROOTCERT")
+          GRANARY_TOKEN_SECRET=$(cat "$secret")
           EOF
         '';
       };
     in
     {
-      ephemeris.services = {
+      ephemeris.processes = {
         granary = {
           command = lib.getExe setup;
           oneShot = true;
+          after = [ "postgres" ];
+          exports = services.clientEnvironment // {
+            GRANARY_CONFIG = "{state}/config.toml";
+            GRANARY_DATABASE_URL = "host=127.0.0.1 port=15432 user=postgres dbname=postgres sslmode=require";
+            GRANARY_LISTEN = "127.0.0.1:18080";
+            AWS_ALLOW_HTTP = "true";
+          };
         };
         migrate = {
-          command = "${env} ${server} migrate";
+          command = "set -a && ${env}exec ${server} migrate";
           oneShot = true;
           after = [
             "granary"
@@ -119,17 +122,25 @@ in
           ];
         };
         serve = {
-          command = "${env} exec ${server} serve";
+          command = "set -a && ${env}exec ${server} serve";
           after = [
+            "garage"
             "garage-setup"
+            "granary"
             "migrate"
           ];
-          readiness.http = "http://127.0.0.1:18080/readyz";
+          ports.http = 18080;
+          readiness.http = {
+            port = "http";
+            path = "/readyz";
+          };
         };
         worker = {
-          command = "${env} exec ${server} worker";
+          command = "set -a && ${env}exec ${server} worker";
           after = [
+            "garage"
             "garage-setup"
+            "granary"
             "migrate"
           ];
         };

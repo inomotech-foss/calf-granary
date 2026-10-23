@@ -1,11 +1,11 @@
 {
   "name": "calf-granary-action",
   "private": true,
-  "description": "Sets up granary build caches in CI jobs",
+  "description": "Build caches for CI runners",
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "engines": {
-    "node": ">=24"
+    "node": "24"
   },
   "scripts": {
     "check": "tsc --project tsconfig.json",
@@ -15,5 +15,17 @@
     "@types/node": "24.19.2",
     "prettier": "3.9.10",
     "typescript": "7.0.2"
+  },
+  "ephemeris": {
+    "dependenciesHash": "sha256-0Nf+71aRZBon8ZjbpohWxYcxEixMcABpbCz6/n7p0UU="
+  },
+  "packageManager": "pnpm@12.9.0",
+  "prettier": {},
+  "publishConfig": {
+    "registry": "https://codeberg.org/api/packages/inomotech/npm/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://codeberg.org/inomotech/calf-granary"
   }
 }
