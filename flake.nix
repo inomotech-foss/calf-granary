@@ -19,7 +19,6 @@
         ./nix/dev.nix
         ./nix/integration.nix
         ./nix/typescript.nix
-        ./nix/static.nix
       ];
 
       granary.ephemeris.cornucopia = {
