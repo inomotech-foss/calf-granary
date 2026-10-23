@@ -49,28 +49,21 @@ in
         ...
       }:
       let
-        generate = pkgs.writeShellApplication {
-          name = "cornucopia-generate";
+        run = pkgs.writeShellApplication {
+          name = "cornucopia-run";
           runtimeInputs = [
             inputs'.cornucopia.packages.cornucopia
             pkgs.coreutils
-            pkgs.git
-            pkgs.postgresql_18
             config.ephemeris.rust.rustfmt
           ];
           text = ''
-            root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-            destination=$(realpath -m "$1/${cfg.destination}")
-            mkdir -p "$(dirname "$destination")"
+            root=$1
+            destination=$2
             work=$(mktemp -d)
-            trap 'pg_ctl --pgdata "$work/data" --mode immediate stop >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
+            trap 'rm -rf "$work"' EXIT
 
-            initdb --pgdata "$work/data" --username postgres --auth trust --no-sync >/dev/null
-            pg_ctl --pgdata "$work/data" --options "-k $work -c listen_addresses=" \
-              --log "$work/postgres.log" --wait start >/dev/null
             for migration in "$root/${cfg.migrations}"/*.sql; do
-              psql --host "$work" --username postgres --dbname postgres \
-                --quiet --set ON_ERROR_STOP=1 --file "$migration"
+              psql --quiet --set ON_ERROR_STOP=1 --file "$migration"
             done
 
             cat >"$work/cornucopia.toml" <<EOF
@@ -95,10 +88,25 @@ in
             version = { workspace = true }
             EOF
             cornucopia live --config "$work/cornucopia.toml" \
-              "postgresql:///postgres?host=$work&user=postgres" >/dev/null
+              "postgresql:///$PGDATABASE?host=$PGHOST&port=$PGPORT&user=$PGUSER" >/dev/null
 
             find "$destination" -name '*.rs' -exec \
               rustfmt --edition 2024 --config-path "$root/rustfmt.toml" {} +
+          '';
+        };
+
+        generate = pkgs.writeShellApplication {
+          name = "cornucopia-generate";
+          runtimeInputs = [
+            config.packages.with-postgres
+            pkgs.coreutils
+            pkgs.git
+          ];
+          text = ''
+            root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+            destination=$(realpath -m "$1/${cfg.destination}")
+            mkdir -p "$(dirname "$destination")"
+            with-postgres ${lib.getExe run} "$root" "$destination"
           '';
         };
       in
