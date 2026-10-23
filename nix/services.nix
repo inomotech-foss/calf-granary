@@ -19,8 +19,6 @@ rec {
     "export GRANARY_NODE=${lib.getExe pkgs.nodejs_24}"
   ];
 
-  curl = "${lib.getExe pkgs.curl} --fail --silent --show-error";
-
   # A CA and a certificate for 127.0.0.1, created once per directory.
   postgresTls = pkgs.writeShellScript "granary-postgres-tls" ''
     set -eu
@@ -43,49 +41,50 @@ rec {
   postgresTlsOptions =
     dir: "-c ssl=on -c ssl_cert_file=${dir}/server.crt -c ssl_key_file=${dir}/server.key";
 
-  s3Config = (pkgs.formats.json { }).generate "granary-s3.json" {
-    identities = [
-      {
-        name = "dev";
-        credentials = [
-          {
-            accessKey = "dev";
-            secretKey = "dev";
-          }
-        ];
-        actions = [ "Admin" ];
-      }
-    ];
-  };
-
   s3Exports = lib.concatStringsSep "\n" [
-    "export AWS_ACCESS_KEY_ID=dev"
-    "export AWS_SECRET_ACCESS_KEY=dev"
-    "export AWS_REGION=us-east-1"
+    "export AWS_ACCESS_KEY_ID=GK000000000000000000000000"
+    "export AWS_SECRET_ACCESS_KEY=${lib.strings.replicate 64 "0"}"
+    "export AWS_REGION=garage"
     "export AWS_ALLOW_HTTP=true"
   ];
 
-  # weed server keeps gRPC sockets in /tmp, named after the port.
-  seaweedfs =
-    { port }:
-    lib.concatStringsSep " " [
-      "${lib.getExe' pkgs.seaweedfs "weed"} server -dir=. -ip=127.0.0.1 -ip.bind=127.0.0.1"
-      "-master.port=$((${port} + 1)) -volume.port=$((${port} + 2)) -volume.max=100"
-      "-filer -filer.port=$((${port} + 3)) -filer.localSocket=filer.sock"
-      "-s3 -s3.port=${port} -s3.localSocket=s3.sock -s3.config=${s3Config}"
-      "-s3.port.iceberg=0 -s3.port.lance=0 -master.telemetry=false"
-    ];
+  # Starts Garage in the background with one bucket and the s3Exports key.
+  garage = pkgs.writeShellScript "granary-garage" ''
+    set -eu
+    dir=$1
+    port=$2
+    bucket=$3
+    mkdir -p "$dir"
+    cat >"$dir/garage.toml" <<EOF
+    metadata_dir = "$dir/meta"
+    data_dir = "$dir/data"
+    db_engine = "sqlite"
+    replication_factor = 1
+    rpc_bind_addr = "127.0.0.1:$((port + 1))"
+    rpc_public_addr = "127.0.0.1:$((port + 1))"
+    rpc_secret = "$(${lib.getExe pkgs.openssl} rand -hex 32)"
 
-  createBuckets =
-    buckets:
-    pkgs.writeShellScript "granary-buckets" ''
-      s3() {
-        ${curl} --aws-sigv4 "aws:amz:$AWS_REGION:s3" \
-          --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" "$@"
-      }
-      for bucket in ${lib.escapeShellArgs buckets}; do
-        s3 --head "$AWS_ENDPOINT/$bucket" >/dev/null 2>&1 \
-          || s3 --request PUT "$AWS_ENDPOINT/$bucket"
-      done
-    '';
+    [s3_api]
+    s3_region = "garage"
+    api_bind_addr = "127.0.0.1:$port"
+    EOF
+    g() { ${lib.getExe pkgs.garage} -c "$dir/garage.toml" "$@"; }
+    g server >"$dir/garage.log" 2>&1 &
+    echo $! >"$dir/pid"
+    for _ in $(seq 120); do
+      g status >/dev/null 2>&1 && break
+      sleep 1
+    done
+    ${s3Exports}
+    {
+      g layout assign -z test -c 1G "$(g node id -q | cut -d@ -f1)"
+      g layout apply --version 1
+      g bucket create "$bucket"
+      g key import --yes "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY"
+      g bucket allow --read --write --owner "$bucket" --key "$AWS_ACCESS_KEY_ID"
+    } >>"$dir/setup.log" 2>&1 || {
+      cat "$dir/garage.log" "$dir/setup.log"
+      exit 1
+    }
+  '';
 }

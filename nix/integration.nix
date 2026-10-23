@@ -25,7 +25,6 @@ in
           pname = "calf-granary-integration";
           cargoNextestExtraArgs = "--locked --workspace --run-ignored only";
           nativeBuildInputs = nativeBuildInputs ++ [
-            pkgs.curl
             pkgs.nix
             services.postgresql
           ];
@@ -38,31 +37,15 @@ in
             ${services.postgresTls} "$services/tls"
             pg_ctl --pgdata "$services/postgres" --log "$services/postgres.log" --wait start \
               --options "-k $services -c listen_addresses=127.0.0.1 -c port=$pg_port ${services.postgresTlsOptions "$services/tls"}"
-            mkdir "$services/seaweedfs"
-            (cd "$services/seaweedfs" && exec ${services.seaweedfs { port = "$s3_port"; }}) \
-              >"$services/seaweedfs.log" 2>&1 &
-            seaweedfs=$!
-
+            ${services.garage} "$services/garage" "$s3_port" granary-test
             export GRANARY_DATABASE_URL="host=127.0.0.1 port=$pg_port user=postgres dbname=postgres sslmode=require"
             export GRANARY_DATABASE_CA="$services/tls/ca.crt"
-            export AWS_ENDPOINT="http://127.0.0.1:$s3_port"
+            export AWS_ENDPOINT_URL="http://127.0.0.1:$s3_port"
             ${services.s3Exports}
             ${services.clientExports}
-            ready=
-            for _ in $(seq 120); do
-              if ${services.createBuckets [ "granary-test" ]} 2>/dev/null; then
-                ready=1
-                break
-              fi
-              sleep 1
-            done
-            if [ -z "$ready" ]; then
-              cat "$services/seaweedfs.log"
-              exit 1
-            fi
           '';
           postCheck = ''
-            kill "$seaweedfs"
+            kill "$(cat "$services/garage/pid")"
             pg_ctl --pgdata "$services/postgres" --mode fast stop
           '';
         }
