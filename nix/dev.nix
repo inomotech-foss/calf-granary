@@ -62,7 +62,7 @@ in
     { config, pkgs, ... }:
     let
       server = lib.getExe' config.packages.calf-granary-server "calf-granary-server";
-      services = import ./services.nix { inherit lib pkgs; };
+      clients = import ./clients.nix { inherit lib pkgs; };
       granaryConfig = (pkgs.formats.toml { }).generate "granary-dev.toml" { inherit stores caches; };
       env = lib.concatMapStrings (process: ". .ephemeris/services/${process}/exports.env && ") [
         "granary"
@@ -106,7 +106,7 @@ in
           command = lib.getExe setup;
           oneShot = true;
           after = [ "postgres" ];
-          exports = services.clientEnvironment // {
+          exports = clients // {
             GRANARY_CONFIG = "{state}/config.toml";
             GRANARY_DATABASE_URL = "host=127.0.0.1 port=15432 user=postgres dbname=postgres sslmode=require";
             GRANARY_LISTEN = "127.0.0.1:18080";
