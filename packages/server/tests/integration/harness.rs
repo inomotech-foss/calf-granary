@@ -72,8 +72,8 @@ impl Stack {
             "GRANARY_DATABASE_URL must use the key=value form"
         );
         assert!(
-            env::var_os("AWS_ENDPOINT").is_some(),
-            "AWS_ENDPOINT locates the object storage"
+            env::var_os("AWS_ENDPOINT").is_some() || env::var_os("AWS_ENDPOINT_URL").is_some(),
+            "AWS_ENDPOINT or AWS_ENDPOINT_URL locates the object storage"
         );
         let bucket = env::var("GRANARY_TEST_BUCKET").unwrap_or_else(|_| "granary-test".to_owned());
         let nanos = SystemTime::now()
