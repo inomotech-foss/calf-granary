@@ -15,6 +15,12 @@
         targets = [ "x86_64-unknown-linux-musl" ];
       });
     };
+    typescript = {
+      enable = true;
+      pnpm.version = 11;
+      dependencies.hash = "sha256-2s1y9ddE+NvxCxv5HcRS1M7G/3TMafmg6SKzwPMsPNs=";
+      formatter.enable = false;
+    };
     images.calf-granary-server = {
       package = "calf-granary-server";
       platforms = [ "linux/amd64" ];

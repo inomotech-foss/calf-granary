@@ -2,7 +2,7 @@
 /result-*
 /.direnv/
 /.ephemeris/
+/dist/
+/node_modules/
 /result
 /target/
-/node_modules
-/.dev

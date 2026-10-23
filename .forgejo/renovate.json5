@@ -2,7 +2,7 @@
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   dependencyDashboard: true,
   dependencyDashboardApproval: true,
-  enabledManagers: ["github-actions", "nix", "cargo"],
+  enabledManagers: ["github-actions", "nix", "cargo", "npm"],
   ignorePaths: [
     "**/node_modules/**",
     "**/bower_components/**",
@@ -63,6 +63,15 @@
         commands: ["nix run .#ephemeris -- files apply"],
         executionMode: "update",
         fileFilters: ["**/*"],
+      },
+    },
+    {
+      description: "Refresh the vendored pnpm dependency hash after npm updates",
+      matchManagers: ["npm"],
+      postUpgradeTasks: {
+        commands: ["nix run .#ephemeris-typescript-hash"],
+        executionMode: "update",
+        fileFilters: ["**/*.nix"],
       },
     },
   ],
