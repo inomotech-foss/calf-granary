@@ -14,6 +14,18 @@
       workspace.members = lib.genAttrs [ "calf-granary-client" "calf-granary-server" ] (_: {
         targets = [ "x86_64-unknown-linux-musl" ];
       });
+      cornucopia.calf-granary-server-db = {
+        migrations = "packages/server/migrations";
+        queries = "packages/server/queries";
+        destination = "packages/server-db";
+        description = "Generated Postgres bindings for the server queries";
+        keywords = [
+          "cache"
+          "ci"
+          "nix"
+          "yocto"
+        ];
+      };
     };
     typescript.enable = true;
     images.calf-granary-server = {

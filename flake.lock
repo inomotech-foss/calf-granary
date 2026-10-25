@@ -22,28 +22,6 @@
         "type": "github"
       }
     },
-    "cornucopia_2": {
-      "inputs": {
-        "nixpkgs": [
-          "ephemeris",
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1789501636,
-        "narHash": "sha256-UBx4jIMfzabIcR8HMSaKbKGU/ezPidUxI+7dF7U3P6Y=",
-        "owner": "inomotech-foss",
-        "repo": "cornucopia",
-        "rev": "336224d4815abb555987607a940bbd3769f67f89",
-        "type": "github"
-      },
-      "original": {
-        "owner": "inomotech-foss",
-        "repo": "cornucopia",
-        "rev": "336224d4815abb555987607a940bbd3769f67f89",
-        "type": "github"
-      }
-    },
     "crane": {
       "locked": {
         "lastModified": 1788465171,
@@ -61,7 +39,7 @@
     },
     "ephemeris": {
       "inputs": {
-        "cornucopia": "cornucopia_2",
+        "cornucopia": "cornucopia",
         "crane": "crane",
         "flake-parts": "flake-parts",
         "nixpkgs": "nixpkgs",
@@ -122,7 +100,6 @@
     },
     "root": {
       "inputs": {
-        "cornucopia": "cornucopia",
         "ephemeris": "ephemeris"
       }
     },
