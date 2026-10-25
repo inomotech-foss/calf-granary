@@ -9,8 +9,7 @@
       imports = [
         ephemeris.presets.inomotech
         ./ephemeris.nix
-        ./nix/dev.nix
-        ./nix/integration.nix
+        ./dev.nix
       ];
     };
 }

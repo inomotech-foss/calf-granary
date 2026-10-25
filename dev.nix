@@ -58,11 +58,38 @@ in
     };
   };
 
+  ephemeris.checks.integration = {
+    command = lib.concatStringsSep " && " [
+      "export GRANARY_DATABASE_URL=\"host=127.0.0.1 port=$PGPORT user=$PGUSER dbname=$PGDATABASE sslmode=require\""
+      "export GRANARY_DATABASE_CA=$PGSSLROOTCERT"
+      "cargo nextest run --archive-file \"$EPHEMERIS_RUST_TESTS\" --workspace-remap . --extract-to . --tool-config-file \"ephemeris:$EPHEMERIS_NEXTEST_CONFIG\" --run-ignored only"
+    ];
+    services = [
+      "postgres"
+      "garage-setup"
+    ];
+    report = {
+      format = "junit";
+      source.file = "target/nextest/default/junit.xml";
+    };
+  };
+
   perSystem =
     { config, pkgs, ... }:
     let
       server = lib.getExe' config.packages.calf-granary-server "calf-granary-server";
-      clients = import ./clients.nix { inherit lib pkgs; };
+      bitbake = pkgs.fetchFromGitHub {
+        owner = "openembedded";
+        repo = "bitbake";
+        rev = "3ccdabf1ba2b65dde0025ad04f84b80c02a1fd6e";
+        hash = "sha256-JXYnori7Ibd/2qjiLzbkpXwRMucq1Ly3VlI7pWOOhUE=";
+      };
+      # Clients that the end-to-end tests drive the server with.
+      clients = {
+        BITBAKE_ROOT = "${bitbake}";
+        BITBAKE_PYTHON = lib.getExe (pkgs.python3.withPackages (packages: [ packages.websockets ]));
+        GRANARY_NODE = lib.getExe pkgs.nodejs_24;
+      };
       granaryConfig = (pkgs.formats.toml { }).generate "granary-dev.toml" { inherit stores caches; };
       env = lib.concatMapStrings (process: ". .ephemeris/services/${process}/exports.env && ") [
         "granary"
@@ -101,6 +128,17 @@ in
       };
     in
     {
+      ephemeris.checks.integration = {
+        tools = config.ephemeris.rust.tools ++ [ pkgs.nix ];
+        env =
+          config.ephemeris.rust.env
+          // clients
+          // {
+            AWS_ALLOW_HTTP = "true";
+            GRANARY_CLIENT = lib.getExe' config.packages.calf-granary-client "calf-granary-client";
+          };
+      };
+
       ephemeris.processes = {
         granary = {
           command = lib.getExe setup;
