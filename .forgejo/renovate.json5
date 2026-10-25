@@ -83,13 +83,18 @@
       },
     },
     {
-      description: "Regenerate the lockfile and the dependency hash after npm updates",
+      description: "Regenerate the lockfile after npm updates",
       matchManagers: ["npm"],
       postUpgradeTasks: {
         commands: ["nix run .#ephemeris-generate"],
         executionMode: "update",
-        fileFilters: ["**/package.json", "**/pnpm-lock.yaml"],
+        fileFilters: ["**/package.json", "**/package-lock.json"],
       },
+    },
+    {
+      description: "Leave the tools that Ephemeris pins to Ephemeris",
+      enabled: false,
+      matchPackageNames: ["prettier"],
     },
   ],
   prConcurrentLimit: 5,

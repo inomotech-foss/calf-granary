@@ -10,6 +10,7 @@ jobs:
   apply:
     name: Apply repository settings
     runs-on: calf-normal
+    enable-openid-connect: true
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -21,4 +22,4 @@ jobs:
       - name: Apply repository settings
         run: nix run .#ephemeris -- repository apply
         env:
-          FORGEJO_TOKEN: ${{ secrets.NOMOBOT_REPO_WRITE_TOKEN }}
+          NOMOBOT_EPHEMERIS_AUDIENCE: ${{ vars.NOMOBOT_EPHEMERIS_AUDIENCE }}

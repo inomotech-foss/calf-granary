@@ -22,6 +22,28 @@
         "type": "github"
       }
     },
+    "cornucopia_2": {
+      "inputs": {
+        "nixpkgs": [
+          "ephemeris",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1789501636,
+        "narHash": "sha256-UBx4jIMfzabIcR8HMSaKbKGU/ezPidUxI+7dF7U3P6Y=",
+        "owner": "inomotech-foss",
+        "repo": "cornucopia",
+        "rev": "336224d4815abb555987607a940bbd3769f67f89",
+        "type": "github"
+      },
+      "original": {
+        "owner": "inomotech-foss",
+        "repo": "cornucopia",
+        "rev": "336224d4815abb555987607a940bbd3769f67f89",
+        "type": "github"
+      }
+    },
     "crane": {
       "locked": {
         "lastModified": 1788465171,
@@ -39,6 +61,7 @@
     },
     "ephemeris": {
       "inputs": {
+        "cornucopia": "cornucopia_2",
         "crane": "crane",
         "flake-parts": "flake-parts",
         "nixpkgs": "nixpkgs",
@@ -47,11 +70,11 @@
         "vale-ai-tells": "vale-ai-tells"
       },
       "locked": {
-        "lastModified": 1792795436,
-        "narHash": "sha256-vMoLrnktl+B355hjo4W5PpfhGsLATNSzVuH3hJG+e38=",
+        "lastModified": 1792955853,
+        "narHash": "sha256-MH9l7nFRV0wr91UVPF+Q8Q3OoTKkgImGt9XZKVZ6EbA=",
         "ref": "refs/heads/main",
-        "rev": "c03ed04bca6d0c75a79933a2de2bc00b5c2e14d4",
-        "revCount": 1432,
+        "rev": "2b480e13d377e5493cd2f772c5e3a2519cd783ca",
+        "revCount": 1468,
         "type": "git",
         "url": "https://codeberg.org/inomotech/ephemeris"
       },
