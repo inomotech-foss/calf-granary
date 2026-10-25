@@ -6,7 +6,7 @@ use std::path::Path;
 use reqwest::StatusCode;
 use tokio::process::Command;
 
-use crate::harness::{SERVER_BIN, Server, Stack};
+use crate::harness::{Server, Stack, client_bin};
 
 const CACHES: &str = r#"
 [caches.main]
@@ -24,7 +24,7 @@ const SSTATE: &str =
 
 /// Runs a client command and returns its log.
 async fn client(server: &Server, token: &str, args: &[&str]) -> String {
-    let output = Command::new(Path::new(SERVER_BIN).with_file_name("calf-granary-client"))
+    let output = Command::new(client_bin())
         .args(args)
         .env("GRANARY_SERVER", server.url(""))
         .env("GRANARY_TOKEN", token)

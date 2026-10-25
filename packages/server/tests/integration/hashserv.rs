@@ -4,7 +4,7 @@ use std::env;
 
 use tokio::process::Command;
 
-use crate::harness::Stack;
+use crate::harness::{Stack, manifest_dir};
 
 const CACHES: &str = r#"
 stores = {}
@@ -35,10 +35,7 @@ async fn round_trips_with_bitbake() {
     };
 
     let output = Command::new(python)
-        .arg(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/integration/hashserv.py"
-        ))
+        .arg(manifest_dir().join("tests/integration/hashserv.py"))
         .args([
             &root,
             &url("hash-main"),

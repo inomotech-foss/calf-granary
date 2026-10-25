@@ -27,9 +27,6 @@ pub(crate) const EMPTY: &str = "stores = {}\ncaches = {}";
 /// The store of every test, below the test's prefix.
 const STORE: &str = "[stores.test]\nbucket = \"$bucket\"\nprefix = \"$prefix\"\n";
 
-/// The binary under test.
-pub(crate) const SERVER_BIN: &str = env!("CARGO_BIN_EXE_calf-granary-server");
-
 /// The token secret of every test.
 const SECRET: &str = "0123456789abcdef0123456789abcdef";
 
@@ -138,7 +135,7 @@ impl Stack {
 
     /// Prepares a server command with the test's configuration.
     pub(crate) fn command(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(SERVER_BIN);
+        let mut command = Command::new(server_bin());
         command
             .args(args)
             .env("GRANARY_CONFIG", self.dir.join("config.toml"))
@@ -274,6 +271,33 @@ impl Server {
             .await
             .expect("serve becomes ready");
     }
+}
+
+/// The binary under test.
+///
+/// nextest sets `NEXTEST_BIN_EXE_<name>` to the path in an extracted archive.
+/// The path from the build only holds when the tests run where they were
+/// built.
+pub(crate) fn server_bin() -> PathBuf {
+    env::var_os("NEXTEST_BIN_EXE_calf-granary-server").map_or_else(
+        || PathBuf::from(env!("CARGO_BIN_EXE_calf-granary-server")),
+        PathBuf::from,
+    )
+}
+
+/// The client binary, `GRANARY_CLIENT` or the one built next to the server.
+pub(crate) fn client_bin() -> PathBuf {
+    env::var_os("GRANARY_CLIENT").map_or_else(
+        || server_bin().with_file_name("calf-granary-client"),
+        PathBuf::from,
+    )
+}
+
+/// The server package directory, which nextest remaps in an extracted
+/// archive.
+pub(crate) fn manifest_dir() -> PathBuf {
+    env::var_os("CARGO_MANIFEST_DIR")
+        .map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), PathBuf::from)
 }
 
 /// Stops a process with SIGTERM and waits for it.

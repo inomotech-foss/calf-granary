@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt as _;
 use tokio::process::Command;
 
-use crate::harness::{SERVER_BIN, Server, Stack};
+use crate::harness::{Server, Stack, client_bin};
 
 const CACHES: &str = r#"
 [caches.nix-main]
@@ -477,7 +477,7 @@ async fn register_built(dir: &Path, store: &str) -> String {
 
 /// Pushes a store path from `store` with the client.
 async fn push_with_client(server: &Server, token: &str, dir: &Path, store: &str, path: &str) {
-    let output = Command::new(Path::new(SERVER_BIN).with_file_name("calf-granary-client"))
+    let output = Command::new(client_bin())
         .args(["nix", "push", "--cache", "nix-main", path])
         .env("GRANARY_SERVER", server.url(""))
         .env("GRANARY_TOKEN", token)

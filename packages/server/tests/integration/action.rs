@@ -8,7 +8,7 @@ use reqwest::StatusCode;
 use tokio::process::Command;
 
 use crate::forge::{Forge, RUNNER_TOKEN};
-use crate::harness::{SERVER_BIN, Server, Stack};
+use crate::harness::{Server, Stack, client_bin, manifest_dir};
 
 const KEY: &str =
     "pr-1:gDQElRwG6hWQbzvWiPbOwXBTfsbJksJCSpVX/RYucmv/Qjzzg/1fQ4UimSnxIDFlz+sk9nb4Z1Ws41Rc6LhzIg==";
@@ -37,7 +37,7 @@ fn file_commands(path: &Path) -> BTreeMap<String, String> {
 /// Runs a step of the action and returns its log.
 async fn step(script: &str, envs: &BTreeMap<String, String>) -> String {
     let node = env::var("GRANARY_NODE").unwrap_or_else(|_| "node".to_owned());
-    let action = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../action");
+    let action = manifest_dir().join("../../action");
     let output = Command::new(node)
         .arg(action.join(script))
         .envs(envs)
@@ -121,13 +121,7 @@ fn runner_env(server: &str, forge: &str, dir: &Path) -> BTreeMap<String, String>
         ("INPUT_BITBAKE-CONF", show("conf/auto.conf")),
         ("INPUT_SSTATE-DIR", show("sstate")),
         ("INPUT_DOWNLOADS-DIR", show("downloads")),
-        (
-            "INPUT_CLIENT",
-            Path::new(SERVER_BIN)
-                .with_file_name("calf-granary-client")
-                .display()
-                .to_string(),
-        ),
+        ("INPUT_CLIENT", client_bin().display().to_string()),
         ("RUNNER_TEMP", show("runner")),
         ("GITHUB_ENV", show("env")),
         ("GITHUB_STATE", show("state")),

@@ -242,8 +242,8 @@ pub(crate) async fn verify(client: &Client) -> Result<(), MigrationError> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::path::Path;
+    use std::path::PathBuf;
+    use std::{env, fs};
 
     use super::*;
 
@@ -268,7 +268,9 @@ mod tests {
 
     #[test]
     fn embedded_list_matches_directory() {
-        let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+        let manifest_dir = env::var_os("CARGO_MANIFEST_DIR")
+            .map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), PathBuf::from);
+        let directory = manifest_dir.join("migrations");
         let mut files: Vec<String> = fs::read_dir(directory)
             .unwrap()
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
