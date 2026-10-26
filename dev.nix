@@ -59,11 +59,13 @@ in
   };
 
   ephemeris.checks.integration = {
-    command = lib.concatStringsSep " && " [
-      "export GRANARY_DATABASE_URL=\"host=127.0.0.1 port=$PGPORT user=$PGUSER dbname=$PGDATABASE sslmode=require\""
-      "export GRANARY_DATABASE_CA=$PGSSLROOTCERT"
-      "cargo nextest run --archive-file \"$EPHEMERIS_RUST_TESTS\" --workspace-remap . --extract-to . --tool-config-file \"ephemeris:$EPHEMERIS_NEXTEST_CONFIG\" --run-ignored only"
-    ];
+    command = ''
+      export GRANARY_DATABASE_URL="host=127.0.0.1 port=$PGPORT user=$PGUSER dbname=$PGDATABASE sslmode=require"
+      export GRANARY_DATABASE_CA=$PGSSLROOTCERT
+      dir=$(mktemp -d)
+      trap 'rm -rf "$dir"' EXIT
+      cargo nextest run --archive-file "$EPHEMERIS_RUST_TESTS" --workspace-remap . --extract-to "$dir" --tool-config-file "ephemeris:$EPHEMERIS_NEXTEST_CONFIG" --run-ignored only
+    '';
     services = [
       "postgres"
       "garage-setup"
