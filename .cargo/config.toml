@@ -1,4 +1,5 @@
 [registries]
 
 [registries.codeberg-inomotech]
+# Managed by Ephemeris. Set ephemeris.rust.cargo.registries.
 index = "sparse+https://codeberg.org/api/packages/inomotech/cargo/"
