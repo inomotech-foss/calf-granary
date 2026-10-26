@@ -7,7 +7,13 @@
       description = "Build caches for CI runners";
       license = lib.licenses.agpl3Plus;
     };
-    repository.forge = "forgejo";
+    repository = {
+      forge = "forgejo";
+      forgejo.branchRules.rules.main = {
+        push = "whitelist";
+        pushWhitelistUsernames = [ "scootermon" ];
+      };
+    };
     commitMessage.format = "conventional";
     rust = {
       enable = true;
