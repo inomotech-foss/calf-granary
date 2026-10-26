@@ -28,6 +28,18 @@
       };
     };
     typescript.enable = true;
+    release = {
+      enable = true;
+      units.calf-granary-chart = {
+        target.document.path = "charts/calf-granary/Chart.yaml";
+        dependencies = [ "calf-granary-server" ];
+        pins.calf-granary-server = {
+          path = "charts/calf-granary/Chart.yaml";
+          key = [ "appVersion" ];
+        };
+      };
+    };
+    releaseWorkflow.enable = true;
     images.calf-granary-server = {
       package = "calf-granary-server";
       platforms = [ "linux/amd64" ];
@@ -37,8 +49,12 @@
         gid = 65534;
       };
       environment.SSL_CERT_FILE = "/etc/ssl/certs/ca-bundle.crt";
+      release.unit = "calf-granary-server";
     };
-    charts.calf-granary.lint.values = [ "charts/calf-granary/ci-values.yaml" ];
+    charts.calf-granary = {
+      lint.values = [ "charts/calf-granary/ci-values.yaml" ];
+      release.unit = "calf-granary-chart";
+    };
     # PN is the recipe name in BitBake's hash equivalence protocol.
     typos.default.extendWords.pn = "pn";
   };

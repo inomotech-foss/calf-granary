@@ -1,0 +1,86 @@
+name: Deploy
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      regenerate:
+        default: false
+        description: Replace manual proposal branch edits
+        required: false
+        type: boolean
+      revision:
+        description: Positive packaging revision
+        required: false
+        type: string
+      unit:
+        description: Release unit identifier
+        required: false
+        type: string
+      version:
+        description: Explicit version for the unit
+        required: false
+        type: string
+concurrency:
+  cancel-in-progress: false
+  group: deploy
+jobs:
+  release-proposal:
+    name: Maintain release proposal
+    runs-on: calf-normal
+    needs:
+      - release-publish
+    if: ${{ !cancelled() && needs.release-publish.result != 'failure' && (forge.event_name != 'pull_request' || forge.event.pull_request.merged == true && forge.event.pull_request.head.ref == 'ephemeris/release') }}
+    enable-openid-connect: true
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ forge.event.pull_request.merge_commit_sha || forge.sha }}
+      - name: Install Nix
+        uses: https://github.com/cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
+        with:
+          install_options: '--yes'
+      - name: Refresh release proposal
+        run: |
+          proposal_args=()
+          if [ -n "$EPHEMERIS_RELEASE_UNIT" ]; then proposal_args+=(--unit "$EPHEMERIS_RELEASE_UNIT"); fi
+          if [ -n "$EPHEMERIS_RELEASE_VERSION" ]; then proposal_args+=(--version "$EPHEMERIS_RELEASE_VERSION"); fi
+          if [ -n "$EPHEMERIS_RELEASE_REVISION" ]; then proposal_args+=(--revision "$EPHEMERIS_RELEASE_REVISION"); fi
+          if [ "$EPHEMERIS_RELEASE_REGENERATE" = 'true' ]; then proposal_args+=(--regenerate); fi
+          nix run .#ephemeris -- release --repository . proposal "${proposal_args[@]}" --forge-repo "$EPHEMERIS_RELEASE_REPOSITORY" --forge-url '${{ forge.server_url }}' --date "$(date -u +%F)"
+        env:
+          EPHEMERIS_RELEASE_REGENERATE: ${{ inputs.regenerate }}
+          EPHEMERIS_RELEASE_REPOSITORY: ${{ forge.repository }}
+          EPHEMERIS_RELEASE_REVISION: ${{ inputs.revision }}
+          EPHEMERIS_RELEASE_UNIT: ${{ inputs.unit }}
+          EPHEMERIS_RELEASE_VERSION: ${{ inputs.version }}
+          NOMOBOT_EPHEMERIS_AUDIENCE: ${{ vars.NOMOBOT_EPHEMERIS_AUDIENCE }}
+  release-publish:
+    name: Publish merged releases
+    runs-on: calf-normal
+    if: ${{ forge.event_name == 'pull_request' && forge.event.pull_request.merged == true && forge.event.pull_request.head.ref == 'ephemeris/release' }}
+    enable-openid-connect: true
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ forge.event.pull_request.merge_commit_sha }}
+      - name: Install Nix
+        uses: https://github.com/cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
+        with:
+          install_options: '--yes'
+      - name: Build publication artifacts
+        run: nix build .#ephemeris-artifacts
+      - name: Publish selected release units
+        run: nix run .#ephemeris -- release --repository . publish --commit '${{ forge.event.pull_request.merge_commit_sha }}' --forge-repo '${{ forge.repository }}' --forge-url '${{ forge.server_url }}' --artifact-manifest result/manifest.json --artifact-directory result
+        env:
+          NOMOBOT_EPHEMERIS_AUDIENCE: ${{ vars.NOMOBOT_EPHEMERIS_AUDIENCE }}
