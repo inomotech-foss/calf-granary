@@ -34,6 +34,10 @@
       };
     };
     typescript.enable = true;
+    direnv.watch = [
+      "ephemeris.nix"
+      "dev.nix"
+    ];
     release = {
       enable = true;
       units.calf-granary-chart = {
