@@ -138,6 +138,7 @@ in
           // {
             AWS_ALLOW_HTTP = "true";
             GRANARY_CLIENT = lib.getExe' config.packages.calf-granary-client "calf-granary-client";
+            SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
           };
       };
 
