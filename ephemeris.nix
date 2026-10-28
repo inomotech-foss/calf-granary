@@ -14,7 +14,7 @@
         pushWhitelistUsernames = [ "scootermon" ];
       };
     };
-    commitMessage.format = "conventional";
+    commitMessage.conventional.allowScopes = false;
     rust = {
       enable = true;
       workspace.members = lib.genAttrs [ "calf-granary-client" "calf-granary-server" ] (_: {
