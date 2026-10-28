@@ -68,7 +68,7 @@ jobs:
         with:
           GITHUB_TOKEN: ${{ steps.credential.outputs.value }}
           comment_tag: pr-review
-          create_if_not_exists: false
+          create_if_not_exists: true
           message: |-
             # Review
 
