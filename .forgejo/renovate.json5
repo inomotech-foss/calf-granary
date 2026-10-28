@@ -14,6 +14,7 @@
     ".forgejo/workflows/pull-request.yaml",
     ".forgejo/workflows/release.yaml",
     ".forgejo/workflows/repository.yaml",
+    ".gitattributes",
     ".gitignore",
     ".npmrc",
     "LICENSE",
