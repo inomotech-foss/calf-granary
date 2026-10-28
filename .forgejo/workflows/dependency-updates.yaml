@@ -34,11 +34,11 @@ jobs:
           RENOVATE_ALLOWED_COMMANDS: '["^nix run \\.#ephemeris -- files apply$","^nix run \\.#ephemeris-generate$"]'
           RENOVATE_CACHE_DIR: .renovate-cache/
           RENOVATE_CONFIG: '{"allowCustomCrateRegistries":true,"configFileNames":[".forgejo/renovate.json5"],"onboarding":false}'
-          RENOVATE_ENDPOINT: ${{ forge.api_url }}
+          RENOVATE_FORGE_API_URL: ${{ forge.api_url }}
+          RENOVATE_FORGE_REPOSITORY: ${{ forge.repository }}
           RENOVATE_GITHUB_COM_TOKEN: ${{ secrets.RENOVATE_GITHUB_COM_TOKEN }}
           RENOVATE_GIT_AUTHOR: ${{ vars.NOMOBOT_GIT_NAME }} <${{ vars.NOMOBOT_GIT_EMAIL }}>
           RENOVATE_PLATFORM: forgejo
-          RENOVATE_REPOSITORIES: ${{ forge.repository }}
           RENOVATE_REPOSITORY_CACHE: enabled
           RENOVATE_REPOSITORY_CACHE_TYPE: local
           RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}

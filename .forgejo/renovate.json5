@@ -4,7 +4,7 @@
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   dependencyDashboard: true,
   dependencyDashboardApproval: true,
-  enabledManagers: ["github-actions", "cargo", "npm", "nix"],
+  enabledManagers: ["github-actions", "npm", "cargo", "nix"],
   ignorePaths: [
     "**/node_modules/**",
     "**/bower_components/**",
@@ -58,11 +58,6 @@
       pinDigests: false,
     },
     {
-      description: "Leave in-range Cargo updates to lockfile maintenance",
-      matchManagers: ["cargo"],
-      rangeStrategy: "replace",
-    },
-    {
       description: "Reconcile Ephemeris after its flake input updates",
       groupName: null,
       matchDepNames: ["ephemeris"],
@@ -88,6 +83,11 @@
         executionMode: "update",
         fileFilters: ["**/*"],
       },
+    },
+    {
+      description: "Leave in-range Cargo updates to lockfile maintenance",
+      matchManagers: ["cargo"],
+      rangeStrategy: "replace",
     },
     {
       description: "Regenerate the lockfile after npm updates",
