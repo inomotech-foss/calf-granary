@@ -12,7 +12,7 @@ version = "0.1.0"
 description = "Build caches for CI runners"
 
 [workspace.dependencies]
-calf-granary-server-db = { path = "packages/server-db", default-features = false }
+calf-granary-server-db = { path = "packages/server-db", default-features = false, version = "0.1.0" }
 
 async-compression = { version = "0.4.51", default-features = false }
 aws-lc-rs = { version = "1.18.2", default-features = false }
