@@ -40,7 +40,11 @@
     ];
     release = {
       enable = true;
+      units.calf-granary-client.tagPrefix = "client-v";
+      units.calf-granary-server.tagPrefix = "server-v";
+      units.calf-granary-server-db.tagPrefix = "server-db-v";
       units.calf-granary-chart = {
+        tagPrefix = "chart-v";
         target.document.path = "charts/calf-granary/Chart.yaml";
         dependencies = [ "calf-granary-server" ];
         pins.calf-granary-server = {
