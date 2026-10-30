@@ -17,9 +17,13 @@
     commitMessage.conventional.allowScopes = false;
     rust = {
       enable = true;
-      workspace.members = lib.genAttrs [ "calf-granary-client" "calf-granary-server" ] (_: {
-        targets = [ "x86_64-unknown-linux-musl" ];
-      });
+      workspace.members = {
+        calf-granary-client.targets = [
+          "x86_64-unknown-linux-musl"
+          "aarch64-unknown-linux-musl"
+        ];
+        calf-granary-server.targets = [ "x86_64-unknown-linux-musl" ];
+      };
       cornucopia.calf-granary-server-db = {
         migrations = "packages/server/migrations";
         queries = "packages/server/queries";
