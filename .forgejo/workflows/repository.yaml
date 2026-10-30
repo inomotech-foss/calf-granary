@@ -20,6 +20,11 @@ jobs:
         uses: https://github.com/cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
         with:
           install_options: '--yes'
+      - name: Set up the build cache
+        uses: https://codeberg.org/inomotech/calf-granary@d16ce853bb13d44abc37e4521ae795cf2f9e0c55
+        with:
+          audience: calf-granary
+          server: https://granary.svc.inomo.tech
       - name: Apply repository settings
         run: nix run .#ephemeris -- repository apply
         env:

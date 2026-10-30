@@ -11,6 +11,7 @@ jobs:
     runs-on: calf-normal
     outputs:
       summary: ${{ steps.summary.outputs.markdown }}
+    enable-openid-connect: true
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -20,6 +21,11 @@ jobs:
         uses: https://github.com/cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
         with:
           install_options: '--yes'
+      - name: Set up the build cache
+        uses: https://codeberg.org/inomotech/calf-granary@d16ce853bb13d44abc37e4521ae795cf2f9e0c55
+        with:
+          audience: calf-granary
+          server: https://granary.svc.inomo.tech
       - id: reports
         name: Build check reports
         run: nix build .#ephemeris-reports --out-link reports
@@ -27,7 +33,7 @@ jobs:
         name: Run enabled applicable checks
         run: nix run .#ephemeris-check -- run-applicable --context checkout
       - name: Run flake checks
-        run: nix flake check
+        run: nix flake check -L
       - id: summary
         name: Build summary
         if: ${{ always() }}
@@ -39,42 +45,6 @@ jobs:
             nix run .#ephemeris -- report summary reports/* .ephemeris/reports/*
             echo EOF
           } >> "$FORGEJO_OUTPUT"
-  comment-end:
-    name: Report PR review results
-    runs-on: calf-normal
-    needs:
-      - comment-start
-      - checks
-    if: ${{ !cancelled() }}
-    enable-openid-connect: true
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          persist-credentials: false
-      - name: Install Nix
-        uses: https://github.com/cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
-        with:
-          install_options: '--yes'
-      - id: credential
-        name: Read the forge credential
-        run: |
-          value="$(nix run .#ephemeris -- credential read forge)"
-          echo "::add-mask::$value"
-          echo "value=$value" >> "$FORGEJO_OUTPUT"
-        env:
-          NOMOBOT_EPHEMERIS_AUDIENCE: ${{ vars.NOMOBOT_EPHEMERIS_AUDIENCE }}
-      - name: Update pull request comment
-        uses: https://codeberg.org/inomotech/actions-comment-pull-request@e007c4a9d16daf06989ab390ba8c2d45632acb01
-        with:
-          GITHUB_TOKEN: ${{ steps.credential.outputs.value }}
-          comment_tag: pr-review
-          create_if_not_exists: true
-          message: |-
-            # Review
-
-            Completed for commit ${{ forge.sha }}.
-
-            ${{ needs.checks.outputs.summary }}
   comment-start:
     name: Report PR review start
     runs-on: calf-normal
@@ -88,6 +58,11 @@ jobs:
         uses: https://github.com/cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
         with:
           install_options: '--yes'
+      - name: Set up the build cache
+        uses: https://codeberg.org/inomotech/calf-granary@d16ce853bb13d44abc37e4521ae795cf2f9e0c55
+        with:
+          audience: calf-granary
+          server: https://granary.svc.inomo.tech
       - id: credential
         name: Read the forge credential
         run: |
@@ -110,8 +85,52 @@ jobs:
     name: Gate
     runs-on: calf-normal
     needs:
+      - comment-start
       - checks
     if: ${{ always() }}
+    enable-openid-connect: true
     steps:
       - name: Require upstream jobs
         run: test '${{ needs.checks.result }}' = success
+      - if: ${{ always() }}
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+        continue-on-error: true
+      - name: Install Nix
+        if: ${{ always() }}
+        uses: https://github.com/cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
+        with:
+          install_options: '--yes'
+        continue-on-error: true
+      - name: Set up the build cache
+        if: ${{ always() }}
+        uses: https://codeberg.org/inomotech/calf-granary@d16ce853bb13d44abc37e4521ae795cf2f9e0c55
+        with:
+          audience: calf-granary
+          server: https://granary.svc.inomo.tech
+        continue-on-error: true
+      - id: credential
+        name: Read the forge credential
+        if: ${{ always() }}
+        run: |
+          value="$(nix run .#ephemeris -- credential read forge)"
+          echo "::add-mask::$value"
+          echo "value=$value" >> "$FORGEJO_OUTPUT"
+        env:
+          NOMOBOT_EPHEMERIS_AUDIENCE: ${{ vars.NOMOBOT_EPHEMERIS_AUDIENCE }}
+        continue-on-error: true
+      - name: Update pull request comment
+        if: ${{ always() }}
+        uses: https://codeberg.org/inomotech/actions-comment-pull-request@e007c4a9d16daf06989ab390ba8c2d45632acb01
+        with:
+          GITHUB_TOKEN: ${{ steps.credential.outputs.value }}
+          comment_tag: pr-review
+          create_if_not_exists: true
+          message: |-
+            # Review
+
+            Completed for commit ${{ forge.sha }}.
+
+            ${{ needs.checks.outputs.summary }}
+        continue-on-error: true
