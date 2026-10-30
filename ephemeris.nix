@@ -128,6 +128,7 @@ in
     };
     # PN is the recipe name in BitBake's hash equivalence protocol.
     typos.default.extendWords.pn = "pn";
+    typos.default.extendWords.restat = "restat";
   };
 
   perSystem =
