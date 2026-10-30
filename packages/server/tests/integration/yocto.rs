@@ -1,12 +1,14 @@
 //! Pushing Yocto files with the client.
 
+use core::time::Duration;
 use std::fs;
 use std::path::Path;
 
 use reqwest::StatusCode;
 use tokio::process::Command;
+use tokio::time;
 
-use crate::harness::{Server, Stack, client_bin};
+use crate::harness::{Server, Stack, client_bin, terminate};
 
 const CACHES: &str = r#"
 [caches.main]
@@ -45,6 +47,17 @@ async fn push(server: &Server, token: &str, command: &str, cache: &str, dir: &Pa
         &["yocto", command, "--cache", cache, "--dir", &dir],
     )
     .await
+}
+
+/// Waits up to 30 seconds for a file to be in the cache.
+async fn wait_cached(server: &Server, path: &str) -> bool {
+    for _ in 0..300 {
+        if status(server, path).await == StatusCode::OK {
+            return true;
+        }
+        time::sleep(Duration::from_millis(100)).await;
+    }
+    false
 }
 
 async fn status(server: &Server, path: &str) -> StatusCode {
@@ -130,5 +143,42 @@ async fn pushes_yocto_files() {
     for (path, expected, reason) in cases {
         assert_eq!(status(&server, &path).await, expected, "{reason}");
     }
+    assert!(server.stop().await.success(), "serve stops cleanly");
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres and object storage"]
+async fn uploads_while_watching() {
+    let stack = Stack::new(CACHES).await;
+    stack.migrate().await;
+    let server = stack.serve().await;
+    let sstate = stack.dir().join("sstate");
+    fs::create_dir_all(&sstate).unwrap();
+    let token = stack.token(&["pr"]).await;
+    let mut watcher = Command::new(client_bin())
+        .args(["watch", "--interval", "1", "--settle", "0"])
+        .args(["--sstate-cache", "pr", "--sstate-dir"])
+        .arg(&sstate)
+        .env("GRANARY_SERVER", server.url(""))
+        .env("GRANARY_TOKEN", &token)
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+
+    let first = sstate.join(SSTATE);
+    fs::create_dir_all(first.parent().unwrap()).unwrap();
+    fs::write(&first, "sstate").unwrap();
+    assert!(
+        wait_cached(&server, &format!("pr/{SSTATE}")).await,
+        "new files are uploaded"
+    );
+    let second = SSTATE.replace("ab/cd/", "ef/01/");
+    fs::create_dir_all(sstate.join("ef/01")).unwrap();
+    fs::write(sstate.join(&second), "sstate").unwrap();
+    assert!(
+        wait_cached(&server, &format!("pr/{second}")).await,
+        "files in new directories are uploaded"
+    );
+    terminate(&mut watcher).await;
     assert!(server.stop().await.success(), "serve stops cleanly");
 }

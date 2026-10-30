@@ -1,11 +1,13 @@
 //! The CI action against a real server, a fake forge and a local Nix store.
 
+use core::time::Duration;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
 use reqwest::StatusCode;
 use tokio::process::Command;
+use tokio::time;
 
 use crate::forge::{Forge, RUNNER_TOKEN};
 use crate::harness::{Server, Stack, client_bin, manifest_dir};
@@ -144,16 +146,18 @@ fn runner_env(server: &str, forge: &str, dir: &Path) -> BTreeMap<String, String>
     .collect()
 }
 
+/// The hash part of a store path.
+fn hash(store_path: &str) -> String {
+    store_path
+        .trim_start_matches("/nix/store/")
+        .split('-')
+        .next()
+        .unwrap()
+        .to_owned()
+}
+
 /// Checks that post uploaded what the job built and nothing older.
 async fn assert_uploaded(server: &Server, token: &str, before: &str, built: &str) {
-    let hash = |store_path: &str| {
-        store_path
-            .trim_start_matches("/nix/store/")
-            .split('-')
-            .next()
-            .unwrap()
-            .to_owned()
-    };
     let cases = [
         (
             format!("sstate-pr/{SSTATE}"),
@@ -323,6 +327,61 @@ async fn reads_public_caches_without_id_tokens() {
     assert!(
         post.contains("nothing to upload"),
         "nothing is uploaded: {post}"
+    );
+    assert!(server.stop().await.success(), "serve stops cleanly");
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres, object storage, Nix and Node"]
+async fn uploads_while_the_job_runs() {
+    let forge = Forge::start().await;
+    let stack = Stack::new(&config(forge.url())).await;
+    stack.write("pr.key", KEY);
+    stack.migrate().await;
+    let server = stack.serve().await;
+    let dir = stack.dir();
+    for name in ["runner", "sstate", "downloads", "conf"] {
+        fs::create_dir_all(dir.join(name)).unwrap();
+    }
+    for name in ["env", "state", "output"] {
+        fs::write(dir.join(name), "").unwrap();
+    }
+    let mut envs = runner_env(&server.url(""), forge.url(), &dir);
+    envs.insert("INPUT_UPLOAD-INTERVAL".to_owned(), "1".to_owned());
+
+    let log = step("main.ts", &envs).await;
+    assert!(
+        log.contains("uploading every 1 seconds"),
+        "the uploader starts: {log}"
+    );
+    let built = add_store_path(&envs, "built").await;
+    let reader = stack.read_token(&["nix-pr"]).await;
+    let narinfo = server.url(&format!("nix-pr/{}.narinfo", hash(&built)));
+    let mut uploaded = false;
+    for _ in 0..300 {
+        let status = server
+            .http()
+            .get(&narinfo)
+            .bearer_auth(&reader)
+            .send()
+            .await
+            .unwrap()
+            .status();
+        if status == StatusCode::OK {
+            uploaded = true;
+            break;
+        }
+        time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(uploaded, "store paths are pushed before the job ends");
+
+    for (name, value) in file_commands(&dir.join("state")) {
+        envs.insert(format!("STATE_{name}"), value);
+    }
+    let post = step("post.ts", &envs).await;
+    assert!(
+        post.contains("::group::Uploads during the job"),
+        "post shows the uploader's log: {post}"
     );
     assert!(server.stop().await.success(), "serve stops cleanly");
 }
