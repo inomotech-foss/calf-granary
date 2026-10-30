@@ -1,5 +1,6 @@
 {
   "name": "calf-granary-action",
+  "version": "0.0.0",
   "private": true,
   "description": "Build caches for CI runners",
   "license": "AGPL-3.0-or-later",

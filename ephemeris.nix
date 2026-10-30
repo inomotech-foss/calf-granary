@@ -75,6 +75,23 @@ in
           }
         ]) clientTargets
       );
+      units.calf-granary-action = {
+        tagPrefix = "action-v";
+        target.npm = {
+          manifest = "package.json";
+          publish = false;
+        };
+        source = [
+          "action"
+          "action.yaml"
+        ];
+        changelog = "action/CHANGELOG.md";
+        dependencies = [ "calf-granary-client" ];
+        pins.calf-granary-client = {
+          path = "action/client.json";
+          key = [ "version" ];
+        };
+      };
       units.calf-granary-chart = {
         tagPrefix = "chart-v";
         target.document.path = "charts/calf-granary/Chart.yaml";
