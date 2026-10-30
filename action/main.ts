@@ -13,7 +13,7 @@ import {
   publicCaches,
   requestIdToken,
 } from "./granary.ts";
-import { output } from "./process.ts";
+import { detach, output } from "./process.ts";
 import {
   booleanInput,
   exportVariable,
@@ -26,6 +26,7 @@ import {
   setSecret,
   warning,
 } from "./runner.ts";
+import { type Sources, watchArgs } from "./watch.ts";
 
 /** Gets a granary token, or warns and returns nothing. */
 async function obtainToken(server: string): Promise<Issued | undefined> {
@@ -44,10 +45,19 @@ async function obtainToken(server: string): Promise<Issued | undefined> {
   }
 }
 
-/** Gets a token if the job can upload, or warns and returns nothing. */
-async function obtainUploadToken(server: string): Promise<Issued | undefined> {
-  if (input("client") !== "") {
-    return await obtainToken(server);
+/** A granary token and the client that uploads with it. */
+interface Uploader {
+  readonly issued: Issued;
+  readonly client: string;
+}
+
+/** Gets a token and the client if the job can upload, or warns and returns
+ * nothing. */
+async function obtainUploader(server: string): Promise<Uploader | undefined> {
+  const client = input("client");
+  if (client !== "") {
+    const issued = await obtainToken(server);
+    return issued === undefined ? undefined : { issued, client };
   }
   const target = clientTarget(process.platform, process.arch);
   if (target === undefined) {
@@ -58,19 +68,22 @@ async function obtainUploadToken(server: string): Promise<Issued | undefined> {
     return undefined;
   }
   const issued = await obtainToken(server);
-  if (issued !== undefined) {
-    const cacheDir =
-      process.env["RUNNER_TOOL_CACHE"] || process.env["RUNNER_TEMP"] || "/tmp";
-    saveState("client", await installClient(target, cacheDir));
+  if (issued === undefined) {
+    return undefined;
   }
-  return issued;
+  const cacheDir =
+    process.env["RUNNER_TOOL_CACHE"] || process.env["RUNNER_TEMP"] || "/tmp";
+  const installed = await installClient(target, cacheDir);
+  saveState("client", installed);
+  return { issued, client: installed };
 }
 
 /** Sets up the caches. */
 async function main(): Promise<void> {
   const started = Math.floor(Date.now() / 1000);
   const server = requiredInput("server");
-  const issued = await obtainUploadToken(server);
+  const uploader = await obtainUploader(server);
+  const issued = uploader?.issued;
   const caches = writableFirst(issued?.caches ?? (await publicCaches(server)));
   if (issued !== undefined) {
     saveState("token", issued.token);
@@ -92,9 +105,10 @@ async function main(): Promise<void> {
     saveState("netrc", netrcFile);
   }
   const nixCache = caches.find((cache) => cache.protocol === "nix");
+  let snapshot = "";
   if (booleanInput("nix") && nixCache !== undefined) {
     if (issued !== undefined) {
-      const snapshot = join(temp, "granary-store-paths");
+      snapshot = join(temp, "granary-store-paths");
       writeFileSync(snapshot, await output("nix", ["path-info", "--all"]));
       saveState("store-paths", snapshot);
     }
@@ -130,6 +144,43 @@ async function main(): Promise<void> {
       saveState("home-netrc", homeNetrc);
     }
   }
+
+  const interval = input("upload-interval") || "120";
+  if (uploader !== undefined && interval !== "0") {
+    startWatcher(server, uploader, {
+      knownPaths: snapshot,
+      sstateDir: input("sstate-dir"),
+      downloadsDir: input("downloads-dir"),
+      since: String(started),
+      interval,
+    });
+  }
+}
+
+/** Starts uploading what the job builds while it runs. */
+function startWatcher(
+  server: string,
+  { issued, client }: Uploader,
+  sources: Sources,
+): void {
+  const args = watchArgs(issued.caches, sources);
+  if (args === undefined) {
+    return;
+  }
+  const log = join(process.env["RUNNER_TEMP"] ?? "/tmp", "granary-watch.log");
+  const pid = detach(
+    client,
+    args,
+    { ...process.env, GRANARY_SERVER: server, GRANARY_TOKEN: issued.token },
+    log,
+  );
+  if (pid === undefined) {
+    warning("calf-granary: the uploader didn't start, uploading after the job");
+    return;
+  }
+  saveState("watcher", String(pid));
+  saveState("watch-log", log);
+  info(`uploading every ${sources.interval} seconds while the job runs`);
 }
 
 /** Orders caches so that BitBake and Nix use the ones the job writes to. */

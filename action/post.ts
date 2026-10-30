@@ -1,11 +1,12 @@
 // Uploads what the job built.
 
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 
 import { replaceBlock } from "./config.ts";
 import type { CacheInfo } from "./granary.ts";
 import { output, run } from "./process.ts";
-import { info, input, state, warning } from "./runner.ts";
+import { endGroup, info, input, startGroup, state, warning } from "./runner.ts";
+import { stopWatcher } from "./watch.ts";
 
 /** Uploads new Nix store paths and Yocto files. */
 async function post(): Promise<void> {
@@ -13,6 +14,11 @@ async function post(): Promise<void> {
   if (token === "") {
     info("granary wasn't set up, nothing to upload");
     return;
+  }
+  const watcher = state("watcher");
+  if (watcher !== "") {
+    await stopWatcher(Number(watcher));
+    showLog(state("watch-log"));
   }
   const caches = (JSON.parse(state("caches")) as CacheInfo[]).filter(
     (cache) => cache.access === "write",
@@ -67,6 +73,16 @@ async function post(): Promise<void> {
       );
     }
   }
+}
+
+/** Shows what the uploader did during the job. */
+function showLog(log: string): void {
+  if (!existsSync(log)) {
+    return;
+  }
+  startGroup("Uploads during the job");
+  process.stdout.write(readFileSync(log, "utf8"));
+  endGroup();
 }
 
 /** Removes the credentials that main wrote. */

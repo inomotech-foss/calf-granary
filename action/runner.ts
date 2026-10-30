@@ -79,6 +79,16 @@ export function info(message: string): void {
   process.stdout.write(`${message}\n`);
 }
 
+/** Starts a collapsed group of log lines. */
+export function startGroup(name: string): void {
+  process.stdout.write(`::group::${escape(name)}\n`);
+}
+
+/** Ends the group of log lines. */
+export function endGroup(): void {
+  process.stdout.write("::endgroup::\n");
+}
+
 /** Logs a warning that the job summary shows. */
 export function warning(message: string): void {
   process.stdout.write(`::warning::${escape(message)}\n`);

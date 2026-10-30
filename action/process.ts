@@ -1,6 +1,7 @@
 // Running other programs.
 
 import { spawn } from "node:child_process";
+import { closeSync, openSync } from "node:fs";
 
 /** Runs a program with the job's output and fails on a non-zero exit. */
 export async function run(
@@ -41,4 +42,27 @@ export async function output(
       }
     });
   });
+}
+
+/** Starts a program that outlives the step, with its output in `log`.
+ * Returns its process ID, or nothing if it didn't start. */
+export function detach(
+  program: string,
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+  log: string,
+): number | undefined {
+  const fd = openSync(log, "a");
+  try {
+    const child = spawn(program, args, {
+      env,
+      detached: true,
+      stdio: ["ignore", fd, fd],
+    });
+    child.on("error", () => {});
+    child.unref();
+    return child.pid;
+  } finally {
+    closeSync(fd);
+  }
 }
