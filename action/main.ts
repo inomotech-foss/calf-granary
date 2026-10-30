@@ -4,7 +4,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { assetName, installClient } from "./client.ts";
+import { clientTarget, installClient } from "./client.ts";
 import { bitbakeConfig, netrc, nixConfig, replaceBlock } from "./config.ts";
 import {
   type CacheInfo,
@@ -49,8 +49,8 @@ async function obtainUploadToken(server: string): Promise<Issued | undefined> {
   if (input("client") !== "") {
     return await obtainToken(server);
   }
-  const asset = assetName(process.platform, process.arch);
-  if (asset === undefined) {
+  const target = clientTarget(process.platform, process.arch);
+  if (target === undefined) {
     warning(
       `calf-granary: there is no client for ${process.platform} ${process.arch}, ` +
         "reading the public caches without uploading",
@@ -61,7 +61,7 @@ async function obtainUploadToken(server: string): Promise<Issued | undefined> {
   if (issued !== undefined) {
     const cacheDir =
       process.env["RUNNER_TOOL_CACHE"] || process.env["RUNNER_TEMP"] || "/tmp";
-    saveState("client", await installClient(asset, cacheDir));
+    saveState("client", await installClient(target, cacheDir));
   }
   return issued;
 }

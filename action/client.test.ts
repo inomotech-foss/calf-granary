@@ -2,33 +2,27 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
 
-import { assetName, assetUrl, parseChecksum, verify } from "./client.ts";
+import { assetUrl, clientTarget, pinnedDigest, verify } from "./client.ts";
 
-test("assets exist for Linux on x64 and arm64", () => {
-  assert.equal(
-    assetName("linux", "x64"),
-    "calf-granary-client-x86_64-unknown-linux-musl",
-  );
-  assert.equal(
-    assetName("linux", "arm64"),
-    "calf-granary-client-aarch64-unknown-linux-musl",
-  );
-  assert.equal(assetName("darwin", "arm64"), undefined);
-  assert.equal(assetName("linux", "riscv64"), undefined);
+test("clients exist for Linux on x64 and arm64", () => {
+  assert.equal(clientTarget("linux", "x64"), "x86_64-unknown-linux-musl");
+  assert.equal(clientTarget("linux", "arm64"), "aarch64-unknown-linux-musl");
+  assert.equal(clientTarget("darwin", "arm64"), undefined);
+  assert.equal(clientTarget("linux", "riscv64"), undefined);
 });
 
 test("asset URLs point at the client release", () => {
   assert.equal(
-    assetUrl("calf-granary-client-x86_64-unknown-linux-musl", "1.2.3"),
+    assetUrl("x86_64-unknown-linux-musl", "1.2.3"),
     "https://codeberg.org/inomotech/calf-granary/releases/download/client-v1.2.3/calf-granary-client-x86_64-unknown-linux-musl",
   );
 });
 
-test("checksums come from sha256sum lines", () => {
+test("an empty or missing digest is refused", () => {
   const hash = "a".repeat(64);
-  assert.equal(parseChecksum(`${hash}  calf-granary-client\n`), hash);
-  assert.equal(parseChecksum(hash.toUpperCase()), hash);
-  assert.throws(() => parseChecksum("<html>"), /unknown format/);
+  assert.equal(pinnedDigest("x", { x: hash }), hash);
+  assert.throws(() => pinnedDigest("x", { x: "" }), /pins no client digest/);
+  assert.throws(() => pinnedDigest("x", {}), /pins no client digest for x/);
 });
 
 test("verify rejects data with another hash", () => {
