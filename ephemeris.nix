@@ -90,6 +90,14 @@ in
         pins.calf-granary-client = {
           path = "action/client.json";
           key = [ "version" ];
+          digests = lib.genAttrs clientTargets (target: {
+            path = "action/client.json";
+            key = [
+              "digests"
+              target
+            ];
+            algorithm = "sha256";
+          });
         };
       };
       units.calf-granary-chart = {
