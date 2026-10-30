@@ -1,10 +1,11 @@
 //! The `nix push` command.
 
+use core::error::Error;
 use std::collections::{BTreeSet, HashSet};
 
 use bytes::Bytes;
 use clap::Args;
-use futures::{StreamExt as _, TryStreamExt as _, stream};
+use futures::{FutureExt as _, StreamExt as _, TryStreamExt as _, future, stream};
 use reqwest::{Body, Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use tokio_util::io::ReaderStream;
@@ -60,6 +61,16 @@ struct MissingRequest<'a> {
     hashes: &'a [&'a str],
 }
 
+/// What a push did.
+#[derive(Debug)]
+pub(crate) struct Pushed {
+    /// The closure of the pushed paths.
+    pub(crate) closure: Closure,
+    /// The paths that weren't uploaded because they or their references
+    /// failed.
+    pub(crate) failed: HashSet<String>,
+}
+
 /// Where and how to upload NARs.
 #[derive(Debug)]
 struct Uploader<'a> {
@@ -76,13 +87,16 @@ struct Uploader<'a> {
 impl PushArgs {
     /// Uploads the closure of the paths, except what the cache has.
     pub(crate) async fn run(self) -> Result<(), PushError> {
-        push(
+        let pushed = push(
             self.target.connection(),
             self.target.cache(),
             &self.paths,
             |_| false,
         )
         .await?;
+        if !pushed.failed.is_empty() {
+            return Err(PushError::Failed(pushed.failed.len()));
+        }
         Ok(())
     }
 }
@@ -142,6 +156,9 @@ impl Uploader<'_> {
 /// Errors from pushing store paths.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum PushError {
+    /// Some store paths weren't uploaded.
+    #[error("failed to upload {0} store paths")]
+    Failed(usize),
     /// `nix store dump-path` failed.
     #[error("failed to dump a store path")]
     Dump,
@@ -174,13 +191,14 @@ pub(crate) enum PushError {
 }
 
 /// Uploads the closure of `paths` to `cache`, except what the cache has and
-/// the paths that are `cached`. Returns the closure.
+/// the paths that are `cached`. A path that fails is logged and skipped,
+/// with the paths that reference it.
 pub(crate) async fn push<F>(
     connection: &Connection,
     cache: &str,
     paths: &[String],
     cached: F,
-) -> Result<Closure, PushError>
+) -> Result<Pushed, PushError>
 where
     F: Fn(&str) -> bool + Sync,
 {
@@ -195,13 +213,12 @@ where
         .iter()
         .filter(|(path, _)| !cached(path))
         .filter_map(|(path, _)| nix::hash_part(path));
-    let missing = stream::iter(hashes)
+    let missing: HashSet<String> = stream::iter(hashes)
         .chunks(MISSING_BATCH)
         .then(|batch| ask_missing(&http, &missing_url, connection.token(), batch))
-        .try_fold(HashSet::new(), async |mut missing, batch| {
-            missing.extend(batch);
-            Ok(missing)
-        })
+        .map_ok(|batch| stream::iter(batch).map(Ok::<_, PushError>))
+        .try_flatten()
+        .try_collect()
         .await?;
     tracing::info!(
         closure = closure.len(),
@@ -217,14 +234,37 @@ where
     let rounds = closure.rounds(|path| {
         nix::hash_part(path).is_some_and(|hash| missing.contains(hash)) && !cached(path)
     });
-    for round in rounds {
+    let mut failed = HashSet::new();
+    for mut round in rounds {
+        let mut blocked = Vec::new();
+        round.retain(|(path, info)| {
+            let ready = !info
+                .references
+                .iter()
+                .any(|reference| failed.contains(reference));
+            if !ready {
+                blocked.push(*path);
+            }
+            ready
+        });
+        failed.extend(blocked.into_iter().map(str::to_owned));
         stream::iter(round)
-            .map(|(path, info)| uploader.upload(path, info))
+            .map(|(path, info)| {
+                uploader
+                    .upload(path, info)
+                    .map(move |uploaded| (path, uploaded))
+            })
             .buffer_unordered(connection.jobs())
-            .try_collect::<()>()
-            .await?;
+            .for_each(|(path, uploaded)| {
+                if let Err(err) = uploaded {
+                    tracing::warn!(error = &err as &dyn Error, path, "push failed");
+                    failed.insert(path.to_owned());
+                }
+                future::ready(())
+            })
+            .await;
     }
-    Ok(closure)
+    Ok(Pushed { closure, failed })
 }
 
 /// Asks the cache which store paths of a batch it lacks.

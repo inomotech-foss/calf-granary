@@ -1,5 +1,6 @@
 // The uploader that runs while the job builds.
 
+import { readFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import type { CacheInfo } from "./granary.ts";
@@ -57,6 +58,17 @@ export function watchArgs(
   ];
 }
 
+/** Whether a process exited but wasn't reaped, which happens in containers
+ * whose init doesn't reap orphans. Only Linux tells. */
+function isZombie(pid: number): boolean {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.charAt(stat.lastIndexOf(")") + 2) === "Z";
+  } catch {
+    return false;
+  }
+}
+
 /** Stops the uploader and waits a few seconds for it to exit. */
 export async function stopWatcher(pid: number): Promise<void> {
   try {
@@ -68,6 +80,9 @@ export async function stopWatcher(pid: number): Promise<void> {
     try {
       process.kill(pid, 0);
     } catch {
+      return;
+    }
+    if (isZombie(pid)) {
       return;
     }
     await sleep(100);

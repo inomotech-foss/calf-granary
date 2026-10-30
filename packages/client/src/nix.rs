@@ -234,7 +234,7 @@ where
         found(line.trim_end());
         line.clear();
     }
-    if !child.wait().await.map_err(NixError::Read)?.success() {
+    if !child.wait().await.map_err(NixError::Spawn)?.success() {
         return Err(NixError::Failed);
     }
     Ok(())

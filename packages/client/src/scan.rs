@@ -13,19 +13,6 @@ use crate::yocto::Kind;
 /// because file systems store modification times with limited precision.
 const RACY: Duration = Duration::from_secs(2);
 
-/// A file that belongs in a cache.
-#[derive(Debug)]
-pub(crate) struct Entry {
-    /// The key in the cache.
-    pub(crate) key: String,
-    /// The local file.
-    pub(crate) path: PathBuf,
-    /// When the file was last modified.
-    pub(crate) modified: SystemTime,
-    /// Whether the cache has the file.
-    cached: AtomicBool,
-}
-
 /// Finds the files in a directory that belong in a cache. It keeps what it
 /// read, so later scans only list the directories that changed.
 #[derive(Debug)]
@@ -36,6 +23,15 @@ pub(crate) struct Scanner {
     kind: Kind,
     /// Only files modified at or after this time are found.
     since: Option<SystemTime>,
+}
+
+/// A file that a scan found.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct File<'a> {
+    /// The directory of the file.
+    dir: &'a Dir,
+    /// The file.
+    entry: &'a Entry,
 }
 
 /// What a scan read from one directory.
@@ -51,39 +47,40 @@ struct Dir {
     read_at: SystemTime,
     /// The subdirectories, sorted by path.
     subdirs: Vec<Self>,
-    /// The files that belong in the cache, sorted by key.
+    /// The files that belong in the cache, sorted by name.
     files: Vec<Entry>,
+}
+
+/// A file in a directory listing.
+#[derive(Debug)]
+struct Entry {
+    /// The file name.
+    name: String,
+    /// When the file was last modified.
+    modified: SystemTime,
+    /// Whether the cache has the file.
+    cached: AtomicBool,
 }
 
 /// The files of a directory tree.
 #[derive(Debug)]
 struct Files<'a> {
-    /// The files of the current directory.
-    files: slice::Iter<'a, Entry>,
+    /// The current directory.
+    dir: &'a Dir,
+    /// The files of the current directory still to visit.
+    entries: slice::Iter<'a, Entry>,
     /// The subdirectories still to visit, at each depth.
     dirs: Vec<slice::Iter<'a, Dir>>,
 }
 
-impl Entry {
-    /// Whether the cache has the file.
-    pub(crate) fn is_cached(&self) -> bool {
-        self.cached.load(Ordering::Relaxed)
-    }
-
-    /// Records whether the cache has the file.
-    pub(crate) fn set_cached(&self, cached: bool) {
-        self.cached.store(cached, Ordering::Relaxed);
-    }
-}
-
 impl Scanner {
-    /// Lists the files that were found by the last scan.
-    pub(crate) fn files(&self) -> impl Iterator<Item = &Entry> {
+    /// Lists the files that the last scan found.
+    pub(crate) fn files(&self) -> impl Iterator<Item = File<'_>> {
         Files {
-            files: self.root.files.iter(),
+            dir: &self.root,
+            entries: self.root.files.iter(),
             dirs: vec![self.root.subdirs.iter()],
         }
-        .filter(|file| self.since.is_none_or(|since| file.modified >= since))
     }
 
     /// Creates a scanner that hasn't read anything yet.
@@ -95,9 +92,37 @@ impl Scanner {
         }
     }
 
-    /// Reads the directories that changed since the last scan.
+    /// Reads the directories that changed since the last scan, and the
+    /// modification times of the files that the cache doesn't have yet.
     pub(crate) fn scan(&mut self) -> io::Result<()> {
-        self.root.scan(self.kind)
+        self.root.scan(self.kind, self.since)
+    }
+}
+
+impl File<'_> {
+    /// Whether the cache has the file.
+    pub(crate) fn is_cached(self) -> bool {
+        self.entry.cached.load(Ordering::Relaxed)
+    }
+
+    /// The key in the cache.
+    pub(crate) fn key(self) -> String {
+        format!("{}{}", self.dir.prefix, self.entry.name)
+    }
+
+    /// When the file was last modified.
+    pub(crate) const fn modified(self) -> SystemTime {
+        self.entry.modified
+    }
+
+    /// The local file.
+    pub(crate) fn path(self) -> PathBuf {
+        self.dir.path.join(&self.entry.name)
+    }
+
+    /// Records whether the cache has the file.
+    pub(crate) fn set_cached(self, cached: bool) {
+        self.entry.cached.store(cached, Ordering::Relaxed);
     }
 }
 
@@ -124,7 +149,12 @@ impl Dir {
 
     /// Lists the directory again. Subdirectories keep what they read, and
     /// unchanged files stay cached.
-    fn read(&mut self, kind: Kind, modified: SystemTime) -> io::Result<()> {
+    fn read(
+        &mut self,
+        kind: Kind,
+        since: Option<SystemTime>,
+        modified: SystemTime,
+    ) -> io::Result<()> {
         self.read_at = SystemTime::now();
         self.modified = Some(modified);
         let mut subdirs = Vec::new();
@@ -140,12 +170,14 @@ impl Dir {
                     subdirs.push((entry.path(), name));
                 }
             } else if metadata.is_file() && kind.wants(&name) {
-                files.push(Entry {
-                    key: format!("{}{name}", self.prefix),
-                    path: entry.path(),
-                    modified: metadata.modified()?,
-                    cached: AtomicBool::new(false),
-                });
+                let file_modified = metadata.modified()?;
+                if since.is_none_or(|since| file_modified >= since) {
+                    files.push(Entry {
+                        name,
+                        modified: file_modified,
+                        cached: AtomicBool::new(false),
+                    });
+                }
             }
         }
 
@@ -159,38 +191,62 @@ impl Dir {
             self.subdirs.push(dir);
         }
 
-        files.sort_unstable_by(|a, b| a.key.cmp(&b.key));
+        files.sort_unstable_by(|a, b| a.name.cmp(&b.name));
         let mut old_files = self.files.iter().peekable();
-        for file in &files {
-            while old_files.next_if(|known| known.key < file.key).is_some() {}
-            if let Some(known) = old_files.next_if(|known| known.key == file.key) {
-                file.set_cached(known.is_cached() && known.modified == file.modified);
+        for file in &mut files {
+            while old_files.next_if(|known| known.name < file.name).is_some() {}
+            if let Some(known) = old_files.next_if(|known| known.name == file.name) {
+                *file.cached.get_mut() =
+                    known.cached.load(Ordering::Relaxed) && known.modified == file.modified;
             }
         }
         self.files = files;
         Ok(())
     }
 
+    /// Reads the modification times of the files that the cache doesn't
+    /// have yet, because writing to a file doesn't change its directory.
+    fn restat(&mut self) -> io::Result<()> {
+        for entry in &mut self.files {
+            if *entry.cached.get_mut() {
+                continue;
+            }
+            match fs::metadata(self.path.join(&entry.name)) {
+                Ok(metadata) => entry.modified = metadata.modified()?,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                    entry.modified = SystemTime::now();
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Ok(())
+    }
+
     /// Reads the directories of the tree that changed.
-    fn scan(&mut self, kind: Kind) -> io::Result<()> {
+    fn scan(&mut self, kind: Kind, since: Option<SystemTime>) -> io::Result<()> {
         let modified = fs::metadata(&self.path)?.modified()?;
-        if !self.is_current(modified) {
-            self.read(kind, modified)?;
+        if self.is_current(modified) {
+            self.restat()?;
+        } else {
+            self.read(kind, since, modified)?;
         }
         for dir in &mut self.subdirs {
-            dir.scan(kind)?;
+            dir.scan(kind, since)?;
         }
         Ok(())
     }
 }
 
 impl<'a> Iterator for Files<'a> {
-    type Item = &'a Entry;
+    type Item = File<'a>;
 
-    fn next(&mut self) -> Option<&'a Entry> {
+    fn next(&mut self) -> Option<File<'a>> {
         loop {
-            if let Some(file) = self.files.next() {
-                return Some(file);
+            if let Some(entry) = self.entries.next() {
+                return Some(File {
+                    dir: self.dir,
+                    entry,
+                });
             }
             let dir = loop {
                 let dirs = self.dirs.last_mut()?;
@@ -199,7 +255,8 @@ impl<'a> Iterator for Files<'a> {
                 }
                 self.dirs.pop();
             };
-            self.files = dir.files.iter();
+            self.dir = dir;
+            self.entries = dir.files.iter();
             self.dirs.push(dir.subdirs.iter());
         }
     }
@@ -223,7 +280,7 @@ mod tests {
     /// Scans and returns the keys that were found.
     fn keys(scanner: &mut Scanner) -> Vec<String> {
         scanner.scan().unwrap();
-        let mut keys: Vec<String> = scanner.files().map(|file| file.key.clone()).collect();
+        let mut keys: Vec<String> = scanner.files().map(File::key).collect();
         keys.sort();
         keys
     }
@@ -264,8 +321,17 @@ mod tests {
             [format!("ab/cd/{first}"), format!("ab/cd/{second}")],
             "changed directories are read again"
         );
-        let cached: Vec<bool> = scanner.files().map(Entry::is_cached).collect();
+        let cached: Vec<bool> = scanner.files().map(File::is_cached).collect();
         assert_eq!(cached, [true, false], "unchanged files stay cached");
+
+        touch(&leaf.join(second), past);
+        scanner.scan().unwrap();
+        let modified: Vec<SystemTime> = scanner.files().map(File::modified).collect();
+        assert_eq!(
+            modified.get(1),
+            Some(&past),
+            "uncached files are read again"
+        );
 
         let mut recent = Scanner::new(root.clone(), Kind::Sstate, Some(SystemTime::now()));
         touch(

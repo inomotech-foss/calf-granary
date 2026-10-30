@@ -147,7 +147,7 @@ async function main(): Promise<void> {
 
   const interval = input("upload-interval") || "120";
   if (uploader !== undefined && interval !== "0") {
-    startWatcher(server, uploader, {
+    startWatcher(server, uploader, join(temp, "granary-watch.log"), {
       knownPaths: snapshot,
       sstateDir: input("sstate-dir"),
       downloadsDir: input("downloads-dir"),
@@ -161,13 +161,13 @@ async function main(): Promise<void> {
 function startWatcher(
   server: string,
   { issued, client }: Uploader,
+  log: string,
   sources: Sources,
 ): void {
   const args = watchArgs(issued.caches, sources);
   if (args === undefined) {
     return;
   }
-  const log = join(process.env["RUNNER_TEMP"] ?? "/tmp", "granary-watch.log");
   const pid = detach(
     client,
     args,

@@ -60,8 +60,11 @@ pub(crate) struct WatchArgs {
 struct NixWatch {
     /// The cache.
     cache: String,
-    /// The store paths that were seen, and whether the cache has them.
+    /// The hash parts of the store paths that were seen, and whether the
+    /// cache has them.
     paths: HashMap<String, bool>,
+    /// New store paths that weren't pushed yet.
+    pending: Vec<String>,
 }
 
 /// New files in a directory to upload.
@@ -80,14 +83,9 @@ impl WatchArgs {
         let mut nix = match (self.nix_cache, self.known_paths) {
             (Some(cache), Some(file)) => Some(NixWatch {
                 cache,
-                paths: File::open(&file)
-                    .and_then(|known| {
-                        BufReader::new(known)
-                            .lines()
-                            .map(|path| Ok((path?, false)))
-                            .collect()
-                    })
+                paths: read_known(&file)
                     .map_err(|source| WatchError::KnownPaths { file, source })?,
+                pending: Vec::new(),
             }),
             _ => None,
         };
@@ -128,28 +126,39 @@ impl WatchArgs {
 }
 
 impl NixWatch {
-    /// Pushes the store paths that appeared since the last pass.
+    /// Pushes the store paths that appeared since the last pass, and those
+    /// that failed before.
     async fn pass(&mut self, connection: &Connection) -> Result<(), WatchError> {
-        let mut new = Vec::new();
         nix::each_path(|path| {
             let derivation = Path::new(path).extension().is_some_and(|ext| ext == "drv");
-            if !derivation && !self.paths.contains_key(path) {
-                new.push(path.to_owned());
+            if let Some(hash) = nix::hash_part(path)
+                && !derivation
+                && !self.paths.contains_key(hash)
+            {
+                self.paths.insert(hash.to_owned(), false);
+                self.pending.push(path.to_owned());
             }
         })
         .await?;
-        if new.is_empty() {
+        if self.pending.is_empty() {
             return Ok(());
         }
-        let closure = nix_push::push(connection, &self.cache, &new, |path| {
-            self.paths.get(path).copied().unwrap_or(false)
+        let pushed = nix_push::push(connection, &self.cache, &self.pending, |path| {
+            nix::hash_part(path)
+                .and_then(|hash| self.paths.get(hash))
+                .is_some_and(|cached| *cached)
         })
         .await?;
-        self.paths.extend(new.into_iter().map(|path| (path, false)));
-        for (path, _) in closure.iter() {
-            if let Some(cached) = self.paths.get_mut(path) {
+        for (path, _) in pushed.closure.iter() {
+            if !pushed.failed.contains(path)
+                && let Some(cached) = nix::hash_part(path).and_then(|hash| self.paths.get_mut(hash))
+            {
                 *cached = true;
             }
+        }
+        self.pending.retain(|path| pushed.failed.contains(path));
+        if !pushed.failed.is_empty() {
+            return Err(PushError::Failed(pushed.failed.len()).into());
         }
         Ok(())
     }
@@ -163,7 +172,7 @@ impl FilesWatch {
         let new = self
             .scanner
             .files()
-            .filter(|file| !file.is_cached() && file.modified <= settled);
+            .filter(|file| !file.is_cached() && file.modified() <= settled);
         yocto::push(connection, &self.cache, new).await?;
         Ok(())
     }
@@ -190,4 +199,15 @@ pub(crate) enum WatchError {
     /// Pushing store paths failed.
     #[error(transparent)]
     Push(#[from] PushError),
+}
+
+/// Reads the hash parts of the store paths in a file, one per line.
+fn read_known(file: &Path) -> io::Result<HashMap<String, bool>> {
+    let mut paths = HashMap::new();
+    for line in BufReader::new(File::open(file)?).lines() {
+        if let Some(hash) = nix::hash_part(&line?) {
+            paths.insert(hash.to_owned(), false);
+        }
+    }
+    Ok(paths)
 }

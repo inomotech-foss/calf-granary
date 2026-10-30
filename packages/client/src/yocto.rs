@@ -1,5 +1,6 @@
 //! Uploading Yocto shared state and downloads.
 
+use core::error::Error;
 use core::time::Duration;
 use std::collections::HashSet;
 use std::io;
@@ -7,7 +8,7 @@ use std::path::PathBuf;
 use std::time::UNIX_EPOCH;
 
 use clap::{Args, Subcommand};
-use futures::{StreamExt as _, TryStreamExt as _, stream};
+use futures::{FutureExt as _, StreamExt as _, TryStreamExt as _, stream};
 use reqwest::{Body, Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use tokio::fs::File;
@@ -15,7 +16,7 @@ use tokio::task;
 use tokio_util::io::ReaderStream;
 use url::Url;
 
-use crate::scan::{Entry, Scanner};
+use crate::scan::{self, Scanner};
 use crate::target::{Connection, Target};
 
 /// How many keys one missing-keys request asks about.
@@ -71,6 +72,7 @@ impl Kind {
             Self::Downloads => {
                 !name.starts_with('.')
                     && !LOCAL_SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
+                    && !is_temporary(name)
             }
         }
     }
@@ -80,7 +82,7 @@ impl Kind {
 #[derive(Debug, Serialize)]
 struct MissingRequest<'a> {
     /// The keys to ask about.
-    keys: &'a [&'a str],
+    keys: &'a [String],
 }
 
 /// The answer to a missing-keys request.
@@ -114,6 +116,9 @@ impl YoctoCommand {
 /// Errors from pushing files.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum FilesError {
+    /// Some files weren't uploaded.
+    #[error("failed to upload {0} files")]
+    Failed(usize),
     /// Asking which files are missing failed.
     #[error("failed to ask the cache which files it lacks")]
     Missing(#[source] reqwest::Error),
@@ -148,38 +153,26 @@ pub(crate) enum FilesError {
     Walk(#[source] io::Error),
 }
 
-/// Uploads the files that `cache` lacks and marks them as cached.
-pub(crate) async fn push<'a, I>(
-    connection: &Connection,
-    cache: &str,
-    files: I,
-) -> Result<(), FilesError>
-where
-    I: IntoIterator<Item = &'a Entry, IntoIter: Send>,
-{
-    let http = Client::new();
-    let missing_url = connection.url(["_api", "files", cache, "missing"]);
-    let base = connection.url([cache]);
-    stream::iter(files)
-        .chunks(MISSING_BATCH)
-        .then(|batch| missing(&http, &missing_url, connection.token(), batch))
-        .map_ok(|batch| stream::iter(batch).map(Ok))
-        .try_flatten()
-        .map_ok(|file| upload(&http, &base, connection.token(), file))
-        .try_buffer_unordered(connection.jobs())
-        .try_collect()
-        .await
+/// Whether a name is one that Python's `tempfile.mkstemp` picks. Git
+/// fetches write mirror tarballs to such a file before renaming it.
+fn is_temporary(name: &str) -> bool {
+    name.strip_prefix("tmp").is_some_and(|random| {
+        random.len() == 8
+            && random
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    })
 }
 
-/// Asks the cache which files of a batch it lacks. Marks the others as
-/// cached.
+/// Asks the cache which files of a batch it lacks, and returns those with
+/// their keys. Marks the others as cached.
 async fn missing<'a>(
     http: &Client,
     url: &Url,
     token: &str,
-    batch: Vec<&'a Entry>,
-) -> Result<Vec<&'a Entry>, FilesError> {
-    let keys: Vec<&str> = batch.iter().map(|file| file.key.as_str()).collect();
+    batch: Vec<scan::File<'a>>,
+) -> Result<Vec<(scan::File<'a>, String)>, FilesError> {
+    let keys: Vec<String> = batch.iter().map(|file| file.key()).collect();
     let answer: Missing = http
         .post(url.clone())
         .bearer_auth(token)
@@ -198,28 +191,69 @@ async fn missing<'a>(
     );
     Ok(batch
         .into_iter()
-        .filter(|file| {
-            let missing = answer.missing.contains(&file.key);
+        .zip(keys)
+        .filter(|(file, key)| {
+            let missing = answer.missing.contains(key);
             file.set_cached(!missing);
             missing
         })
         .collect())
 }
 
+/// Uploads the files that `cache` lacks and marks them as cached. A file
+/// that fails is logged and skipped, so it doesn't hold up the others.
+pub(crate) async fn push<'a, I>(
+    connection: &Connection,
+    cache: &str,
+    files: I,
+) -> Result<(), FilesError>
+where
+    I: IntoIterator<Item = scan::File<'a>, IntoIter: Send>,
+{
+    let http = Client::new();
+    let missing_url = connection.url(["_api", "files", cache, "missing"]);
+    let base = connection.url([cache]);
+    let failed = stream::iter(files)
+        .chunks(MISSING_BATCH)
+        .then(|batch| missing(&http, &missing_url, connection.token(), batch))
+        .map_ok(|batch| stream::iter(batch).map(Ok))
+        .try_flatten()
+        .map_ok(|(file, key)| upload(&http, &base, connection.token(), file, key).map(Ok))
+        .try_buffer_unordered(connection.jobs())
+        .try_fold(0usize, async |failed, uploaded: Result<(), FilesError>| {
+            Ok(match uploaded {
+                Ok(()) => failed,
+                Err(err) => {
+                    tracing::warn!(error = &err as &dyn Error, "upload failed");
+                    failed.saturating_add(1)
+                }
+            })
+        })
+        .await?;
+    if failed > 0 {
+        return Err(FilesError::Failed(failed));
+    }
+    Ok(())
+}
+
 /// Uploads one file.
 ///
 /// `base` is the URL of the cache.
-async fn upload(http: &Client, base: &Url, token: &str, file: &Entry) -> Result<(), FilesError> {
-    let key = file.key.as_str();
-    let path = file.path.as_path();
+async fn upload(
+    http: &Client,
+    base: &Url,
+    token: &str,
+    file: scan::File<'_>,
+    key: String,
+) -> Result<(), FilesError> {
     let mut url = base.clone();
     if let Ok(mut segments) = url.path_segments_mut() {
         segments.extend(key.split('/'));
     }
-    let contents = File::open(path).await.map_err(|source| FilesError::Open {
-        path: path.to_owned(),
-        source,
-    })?;
+    let path = file.path();
+    let contents = File::open(&path)
+        .await
+        .map_err(|source| FilesError::Open { path, source })?;
     let response = http
         .put(url)
         .bearer_auth(token)
@@ -227,18 +261,13 @@ async fn upload(http: &Client, base: &Url, token: &str, file: &Entry) -> Result<
         .send()
         .await
         .map_err(|source| FilesError::Upload {
-            key: key.to_owned(),
+            key: key.clone(),
             source,
         })?;
     match response.status() {
         StatusCode::CREATED => tracing::info!(key, "uploaded"),
         StatusCode::NO_CONTENT => tracing::info!(key, "already cached"),
-        status => {
-            return Err(FilesError::Rejected {
-                key: key.to_owned(),
-                status,
-            });
-        }
+        status => return Err(FilesError::Rejected { key, status }),
     }
     file.set_cached(true);
     Ok(())
@@ -275,10 +304,15 @@ mod tests {
             Kind::Downloads.wants("git2_github.com.madler.zlib.git.tar.gz"),
             "mirror tarballs are uploaded"
         );
+        assert!(
+            Kind::Downloads.wants("tmpwatch-2.11.tar.bz2"),
+            "only temporary names are skipped"
+        );
         for name in [
             "zlib-1.3.1.tar.xz.done",
             "zlib-1.3.1.tar.xz.lock",
             ".hidden",
+            "tmpa8b_q2z0",
         ] {
             assert!(!Kind::Downloads.wants(name), "{name} is skipped");
         }
