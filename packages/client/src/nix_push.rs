@@ -11,7 +11,7 @@ use tokio_util::io::ReaderStream;
 use url::Url;
 
 use crate::nix::{self, Closure, NixError, PathInfo, Systems};
-use crate::target::Target;
+use crate::target::{Connection, Target};
 
 /// How many store paths one missing-paths request asks about.
 const MISSING_BATCH: usize = 1000;
@@ -76,54 +76,13 @@ struct Uploader<'a> {
 impl PushArgs {
     /// Uploads the closure of the paths, except what the cache has.
     pub(crate) async fn run(self) -> Result<(), PushError> {
-        let closure = Closure::of(&self.paths).await?;
-        let derivations: BTreeSet<&str> = closure
-            .iter()
-            .filter_map(|(_, info)| info.deriver.as_deref())
-            .collect();
-        let derivations: Vec<&str> = derivations.into_iter().collect();
-        let hashes: Vec<&str> = closure
-            .iter()
-            .filter_map(|(path, _)| nix::hash_part(path))
-            .collect();
-        let http = Client::new();
-        let cache = self.target.cache();
-        let missing_url = self.target.url(["_api", "nix", cache, "missing"]);
-        let mut missing = HashSet::new();
-        for batch in hashes.chunks(MISSING_BATCH) {
-            let answer: Missing = http
-                .post(missing_url.clone())
-                .bearer_auth(self.target.token())
-                .json(&MissingRequest { hashes: batch })
-                .send()
-                .await
-                .and_then(reqwest::Response::error_for_status)
-                .map_err(PushError::Missing)?
-                .json()
-                .await
-                .map_err(PushError::Missing)?;
-            missing.extend(answer.missing);
-        }
-        tracing::info!(
-            closure = closure.len(),
-            missing = missing.len(),
-            "checked the cache"
-        );
-        let uploader = Uploader {
-            http,
-            url: self.target.url(["_api", "nix", cache, "upload"]),
-            token: self.target.token(),
-            systems: Systems::read(&derivations).await?,
-        };
-        let rounds =
-            closure.rounds(|path| nix::hash_part(path).is_some_and(|hash| missing.contains(hash)));
-        for round in rounds {
-            stream::iter(round)
-                .map(|(path, info)| uploader.upload(path, info))
-                .buffer_unordered(self.target.jobs())
-                .try_collect::<Vec<()>>()
-                .await?;
-        }
+        push(
+            self.target.connection(),
+            self.target.cache(),
+            &self.paths,
+            &HashSet::new(),
+        )
+        .await?;
         Ok(())
     }
 }
@@ -212,4 +171,64 @@ pub(crate) enum PushError {
         #[source]
         source: reqwest::Error,
     },
+}
+
+/// Uploads the closure of `paths` to `cache`, except what the cache has and
+/// the paths in `cached`. Returns the store paths of the closure.
+pub(crate) async fn push(
+    connection: &Connection,
+    cache: &str,
+    paths: &[String],
+    cached: &HashSet<String>,
+) -> Result<Vec<String>, PushError> {
+    let closure = Closure::of(paths).await?;
+    let derivations: BTreeSet<&str> = closure
+        .iter()
+        .filter_map(|(_, info)| info.deriver.as_deref())
+        .collect();
+    let derivations: Vec<&str> = derivations.into_iter().collect();
+    let hashes: Vec<&str> = closure
+        .iter()
+        .filter(|(path, _)| !cached.contains(*path))
+        .filter_map(|(path, _)| nix::hash_part(path))
+        .collect();
+    let http = Client::new();
+    let missing_url = connection.url(["_api", "nix", cache, "missing"]);
+    let mut missing = HashSet::new();
+    for batch in hashes.chunks(MISSING_BATCH) {
+        let answer: Missing = http
+            .post(missing_url.clone())
+            .bearer_auth(connection.token())
+            .json(&MissingRequest { hashes: batch })
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(PushError::Missing)?
+            .json()
+            .await
+            .map_err(PushError::Missing)?;
+        missing.extend(answer.missing);
+    }
+    tracing::info!(
+        closure = closure.len(),
+        missing = missing.len(),
+        "checked the cache"
+    );
+    let uploader = Uploader {
+        http,
+        url: connection.url(["_api", "nix", cache, "upload"]),
+        token: connection.token(),
+        systems: Systems::read(&derivations).await?,
+    };
+    let rounds = closure.rounds(|path| {
+        !cached.contains(path) && nix::hash_part(path).is_some_and(|hash| missing.contains(hash))
+    });
+    for round in rounds {
+        stream::iter(round)
+            .map(|(path, info)| uploader.upload(path, info))
+            .buffer_unordered(connection.jobs())
+            .try_collect::<Vec<()>>()
+            .await?;
+    }
+    Ok(closure.iter().map(|(path, _)| path.clone()).collect())
 }

@@ -5,16 +5,13 @@ use core::str::FromStr;
 use clap::Args;
 use url::Url;
 
-/// Command-line arguments that name a cache and how to upload to it.
+/// Command-line arguments that say how to upload to a granary server.
 #[derive(Debug, Args)]
-pub(crate) struct Target {
+pub(crate) struct Connection {
     /// The granary server, such as `https://granary.example.org`.
     #[arg(long, env = "GRANARY_SERVER")]
     server: Server,
-    /// The cache to upload to.
-    #[arg(long)]
-    cache: String,
-    /// A granary write token for the cache.
+    /// A granary write token for the caches.
     #[arg(long, env = "GRANARY_TOKEN", hide_env_values = true)]
     token: String,
     /// How many uploads run at the same time.
@@ -22,7 +19,18 @@ pub(crate) struct Target {
     jobs: usize,
 }
 
-impl Target {
+/// Command-line arguments that name a cache and how to upload to it.
+#[derive(Debug, Args)]
+pub(crate) struct Target {
+    /// The server.
+    #[command(flatten)]
+    connection: Connection,
+    /// The cache to upload to.
+    #[arg(long)]
+    cache: String,
+}
+
+impl Connection {
     /// The URL of a path on the server, given as segments.
     pub(crate) fn url<'a, I>(&self, segments: I) -> Url
     where
@@ -35,11 +43,6 @@ impl Target {
         url
     }
 
-    /// The cache name.
-    pub(crate) fn cache(&self) -> &str {
-        &self.cache
-    }
-
     /// The write token.
     pub(crate) fn token(&self) -> &str {
         &self.token
@@ -48,6 +51,18 @@ impl Target {
     /// How many uploads run at the same time, at least one.
     pub(crate) fn jobs(&self) -> usize {
         self.jobs.max(1)
+    }
+}
+
+impl Target {
+    /// The cache name.
+    pub(crate) fn cache(&self) -> &str {
+        &self.cache
+    }
+
+    /// The server.
+    pub(crate) const fn connection(&self) -> &Connection {
+        &self.connection
     }
 }
 
@@ -89,15 +104,14 @@ mod tests {
             "https://granary.example.org/",
         ] {
             let server: Server = server.parse().unwrap();
-            let target = Target {
+            let connection = Connection {
                 server,
-                cache: "nix main".to_owned(),
                 token: String::new(),
                 jobs: 1,
             };
             assert_eq!(
-                target
-                    .url(["_api", "nix", target.cache(), "upload"])
+                connection
+                    .url(["_api", "nix", "nix main", "upload"])
                     .as_str(),
                 "https://granary.example.org/_api/nix/nix%20main/upload",
                 "segments are escaped"

@@ -3,6 +3,7 @@
 mod nix;
 mod nix_push;
 mod target;
+mod watch;
 mod yocto;
 
 use core::error::Error;
@@ -14,6 +15,7 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
 
 use crate::nix_push::PushArgs;
+use crate::watch::WatchArgs;
 use crate::yocto::YoctoCommand;
 
 /// Build cache client for CI runners.
@@ -34,6 +36,8 @@ enum Command {
         #[command(subcommand)]
         command: NixCommand,
     },
+    /// Upload new store paths and Yocto files while a build runs.
+    Watch(WatchArgs),
     /// Work with Yocto caches.
     Yocto {
         /// The Yocto command to run.
@@ -64,6 +68,7 @@ async fn main() -> ExitCode {
         Command::Nix {
             command: NixCommand::Push(args),
         } => args.run().await.map_err(Into::into),
+        Command::Watch(args) => args.run().await.map_err(Into::into),
         Command::Yocto { command } => command.run().await.map_err(Into::into),
     };
     match result {

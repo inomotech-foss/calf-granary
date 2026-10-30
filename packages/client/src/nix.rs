@@ -206,6 +206,28 @@ impl Closure {
     }
 }
 
+/// Lists every valid path in the store.
+pub(crate) async fn all_paths() -> Result<Vec<String>, NixError> {
+    let output = Command::new("nix")
+        .args([
+            "--extra-experimental-features",
+            "nix-command",
+            "path-info",
+            "--all",
+        ])
+        .stderr(Stdio::inherit())
+        .output()
+        .await
+        .map_err(NixError::Spawn)?;
+    if !output.status.success() {
+        return Err(NixError::Failed);
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::to_owned)
+        .collect())
+}
+
 /// Starts writing the NAR of a store path to the child's stdout.
 ///
 /// This reads through the configured store, so it also works for stores

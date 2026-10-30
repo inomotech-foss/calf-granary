@@ -1,7 +1,7 @@
 //! Uploading Yocto shared state and downloads.
 
 use core::time::Duration;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{fs, io};
@@ -11,11 +11,11 @@ use futures::{StreamExt as _, TryStreamExt as _, stream};
 use reqwest::{Body, Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use tokio::fs::File;
-use tokio::task::{self, JoinError};
+use tokio::task;
 use tokio_util::io::ReaderStream;
 use url::Url;
 
-use crate::target::Target;
+use crate::target::{Connection, Target};
 
 /// How many keys one missing-keys request asks about.
 const MISSING_BATCH: usize = 1000;
@@ -25,6 +25,10 @@ const SSTATE_SUFFIXES: [&str; 4] = [".tar.zst", ".tgz", ".siginfo", ".sig"];
 
 /// The endings of download files that only matter locally.
 const LOCAL_SUFFIXES: [&str; 3] = [".done", ".lock", ".tmp"];
+
+/// How long after a directory changes its listing can still miss entries,
+/// because file systems store modification times with limited precision.
+const RACY: Duration = Duration::from_secs(2);
 
 /// A Yocto command.
 #[derive(Debug, Subcommand)]
@@ -52,7 +56,7 @@ pub(crate) struct FilesArgs {
 
 /// What a directory holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Kind {
+pub(crate) enum Kind {
     /// `SSTATE_DIR`, with files in subdirectories.
     Sstate,
     /// `DL_DIR`, where mirrors serve the top-level files.
@@ -99,45 +103,127 @@ impl YoctoCommand {
         let since = args
             .since
             .and_then(|seconds| UNIX_EPOCH.checked_add(Duration::from_secs(seconds)));
-        let dir = args.dir.clone();
-        let files = task::spawn_blocking(move || collect(&dir, kind, since))
-            .await
-            .map_err(FilesError::Task)?
-            .map_err(FilesError::Walk)?;
-        let http = Client::new();
-        let cache = args.target.cache();
-        let missing_url = args.target.url(["_api", "files", cache, "missing"]);
-        let mut missing = HashSet::new();
-        for batch in files.chunks(MISSING_BATCH) {
-            let keys: Vec<&str> = batch.iter().map(|(key, _)| key.as_str()).collect();
-            let answer: Missing = http
-                .post(missing_url.clone())
-                .bearer_auth(args.target.token())
-                .json(&MissingRequest { keys: &keys })
-                .send()
-                .await
-                .and_then(reqwest::Response::error_for_status)
-                .map_err(FilesError::Missing)?
-                .json()
-                .await
-                .map_err(FilesError::Missing)?;
-            missing.extend(answer.missing);
+        let mut scanner = Scanner::new(args.dir.clone(), kind, since);
+        let files = task::block_in_place(|| scanner.scan()).map_err(FilesError::Walk)?;
+        push(args.target.connection(), args.target.cache(), &files).await
+    }
+}
+
+/// A file that belongs in a cache.
+#[derive(Clone, Debug)]
+pub(crate) struct Entry {
+    /// The key in the cache.
+    pub(crate) key: String,
+    /// The local file.
+    pub(crate) path: PathBuf,
+    /// When the file was last modified.
+    pub(crate) modified: SystemTime,
+}
+
+/// Finds the files in a directory that belong in a cache. It remembers what
+/// it read, so later scans only list the directories that changed.
+#[derive(Debug)]
+pub(crate) struct Scanner {
+    /// The directory, such as `SSTATE_DIR` or `DL_DIR`.
+    root: PathBuf,
+    /// What the directory holds.
+    kind: Kind,
+    /// Only files modified at or after this time are found.
+    since: Option<SystemTime>,
+    /// What the last scan read, by directory.
+    listings: HashMap<PathBuf, Listing>,
+}
+
+/// What a scan read from one directory.
+#[derive(Debug)]
+struct Listing {
+    /// The modification time of the directory.
+    modified: SystemTime,
+    /// When the scan started to read the directory.
+    read_at: SystemTime,
+    /// The subdirectories, with the key prefix of their files.
+    subdirs: Vec<(PathBuf, String)>,
+    /// The files that belong in the cache.
+    files: Vec<Entry>,
+}
+
+impl Scanner {
+    /// Creates a scanner that hasn't read anything yet.
+    pub(crate) fn new(root: PathBuf, kind: Kind, since: Option<SystemTime>) -> Self {
+        Self {
+            root,
+            kind,
+            since,
+            listings: HashMap::new(),
         }
-        tracing::info!(
-            files = files.len(),
-            missing = missing.len(),
-            "checked the cache"
-        );
-        let base = args.target.url([cache]);
-        let uploads = files
-            .iter()
-            .filter(|(key, _)| missing.contains(key))
-            .map(|(key, path)| upload(&http, &base, args.target.token(), key, path));
-        stream::iter(uploads)
-            .buffer_unordered(args.target.jobs())
-            .try_collect::<Vec<()>>()
-            .await?;
-        Ok(())
+    }
+
+    /// Reads one directory.
+    fn read(&self, dir: &Path, prefix: &str, modified: SystemTime) -> io::Result<Listing> {
+        let mut listing = Listing {
+            modified,
+            read_at: SystemTime::now(),
+            subdirs: Vec::new(),
+            files: Vec::new(),
+        };
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let Ok(name) = entry.file_name().into_string() else {
+                continue;
+            };
+            let metadata = entry.metadata()?;
+            if metadata.is_dir() {
+                if self.kind == Kind::Sstate {
+                    listing
+                        .subdirs
+                        .push((entry.path(), format!("{prefix}{name}/")));
+                }
+            } else if metadata.is_file() && self.kind.wants(&name) {
+                listing.files.push(Entry {
+                    key: format!("{prefix}{name}"),
+                    path: entry.path(),
+                    modified: metadata.modified()?,
+                });
+            }
+        }
+        Ok(listing)
+    }
+
+    /// Lists the files that belong in the cache, sorted by key.
+    pub(crate) fn scan(&mut self) -> io::Result<Vec<Entry>> {
+        let mut listings = HashMap::new();
+        let mut files = Vec::new();
+        let mut pending = vec![(self.root.clone(), String::new())];
+        while let Some((dir, prefix)) = pending.pop() {
+            let modified = fs::metadata(&dir)?.modified()?;
+            let listing = match self.listings.remove(&dir) {
+                Some(listing) if listing.is_current(modified) => listing,
+                _ => self.read(&dir, &prefix, modified)?,
+            };
+            pending.extend(listing.subdirs.iter().cloned());
+            files.extend(
+                listing
+                    .files
+                    .iter()
+                    .filter(|file| self.since.is_none_or(|since| file.modified >= since))
+                    .cloned(),
+            );
+            listings.insert(dir, listing);
+        }
+        self.listings = listings;
+        files.sort_by(|a, b| a.key.cmp(&b.key));
+        Ok(files)
+    }
+}
+
+impl Listing {
+    /// Whether the directory is unchanged since it was read.
+    fn is_current(&self, modified: SystemTime) -> bool {
+        modified == self.modified
+            && self
+                .modified
+                .checked_add(RACY)
+                .is_some_and(|settled| settled < self.read_at)
     }
 }
 
@@ -164,9 +250,6 @@ pub(crate) enum FilesError {
         /// The response status.
         status: StatusCode,
     },
-    /// Listing the files failed to run.
-    #[error("the file listing failed")]
-    Task(#[source] JoinError),
     /// Sending an upload failed.
     #[error("failed to upload {key}")]
     Upload {
@@ -179,6 +262,47 @@ pub(crate) enum FilesError {
     /// Listing the files failed.
     #[error("failed to list the files")]
     Walk(#[source] io::Error),
+}
+
+/// Uploads the files that `cache` lacks.
+pub(crate) async fn push(
+    connection: &Connection,
+    cache: &str,
+    files: &[Entry],
+) -> Result<(), FilesError> {
+    let http = Client::new();
+    let missing_url = connection.url(["_api", "files", cache, "missing"]);
+    let mut missing = HashSet::new();
+    for batch in files.chunks(MISSING_BATCH) {
+        let keys: Vec<&str> = batch.iter().map(|file| file.key.as_str()).collect();
+        let answer: Missing = http
+            .post(missing_url.clone())
+            .bearer_auth(connection.token())
+            .json(&MissingRequest { keys: &keys })
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(FilesError::Missing)?
+            .json()
+            .await
+            .map_err(FilesError::Missing)?;
+        missing.extend(answer.missing);
+    }
+    tracing::info!(
+        files = files.len(),
+        missing = missing.len(),
+        "checked the cache"
+    );
+    let base = connection.url([cache]);
+    let uploads = files
+        .iter()
+        .filter(|file| missing.contains(&file.key))
+        .map(|file| upload(&http, &base, connection.token(), &file.key, &file.path));
+    stream::iter(uploads)
+        .buffer_unordered(connection.jobs())
+        .try_collect::<Vec<()>>()
+        .await?;
+    Ok(())
 }
 
 /// Uploads one file.
@@ -222,42 +346,10 @@ async fn upload(
     Ok(())
 }
 
-/// Lists the files that belong in the cache, as keys and paths.
-fn collect(
-    dir: &Path,
-    kind: Kind,
-    since: Option<SystemTime>,
-) -> io::Result<Vec<(String, PathBuf)>> {
-    let mut files = Vec::new();
-    let mut pending = vec![(dir.to_owned(), String::new())];
-    while let Some((current, prefix)) = pending.pop() {
-        for entry in fs::read_dir(&current)? {
-            let entry = entry?;
-            let Ok(name) = entry.file_name().into_string() else {
-                continue;
-            };
-            let metadata = entry.metadata()?;
-            if metadata.is_dir() {
-                if kind == Kind::Sstate {
-                    let mut key = format!("{prefix}{name}");
-                    key.push('/');
-                    pending.push((entry.path(), key));
-                }
-                continue;
-            }
-            let recent =
-                since.is_none_or(|since| metadata.modified().is_ok_and(|time| time >= since));
-            if metadata.is_file() && recent && kind.wants(&name) {
-                files.push((format!("{prefix}{name}"), entry.path()));
-            }
-        }
-    }
-    files.sort();
-    Ok(files)
-}
-
 #[cfg(test)]
 mod tests {
+    use std::{env, process};
+
     use super::*;
 
     #[test]
@@ -294,5 +386,68 @@ mod tests {
         ] {
             assert!(!Kind::Downloads.wants(name), "{name} is skipped");
         }
+    }
+
+    /// Sets the modification time of a file or directory.
+    fn touch(path: &Path, modified: SystemTime) {
+        fs::File::open(path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+    }
+
+    #[test]
+    fn scans_changed_directories() {
+        let root = env::temp_dir().join(format!("granary-scan-{}", process::id()));
+        let leaf = root.join("ab/cd");
+        fs::create_dir_all(&leaf).unwrap();
+        let first = "sstate:a:x:1:r0:x:11:abcd_package.tar.zst";
+        let second = "sstate:b:x:1:r0:x:11:abcd_package.tar.zst";
+        fs::write(leaf.join(first), "").unwrap();
+        fs::write(leaf.join(format!("{second}.Xa8bQ2")), "").unwrap();
+        let past = SystemTime::now() - Duration::from_hours(1);
+        for dir in [&root, &root.join("ab"), &leaf] {
+            touch(dir, past);
+        }
+        let keys = |scanner: &mut Scanner| -> Vec<String> {
+            scanner
+                .scan()
+                .unwrap()
+                .into_iter()
+                .map(|file| file.key)
+                .collect()
+        };
+        let mut scanner = Scanner::new(root.clone(), Kind::Sstate, None);
+        assert_eq!(
+            keys(&mut scanner),
+            [format!("ab/cd/{first}")],
+            "finds sstate"
+        );
+
+        fs::rename(leaf.join(format!("{second}.Xa8bQ2")), leaf.join(second)).unwrap();
+        touch(&leaf, past);
+        assert_eq!(
+            keys(&mut scanner),
+            [format!("ab/cd/{first}")],
+            "unchanged directories aren't read again"
+        );
+        touch(&leaf, past + Duration::from_secs(1));
+        assert_eq!(
+            keys(&mut scanner),
+            [format!("ab/cd/{first}"), format!("ab/cd/{second}")],
+            "changed directories are read again"
+        );
+
+        let mut recent = Scanner::new(root.clone(), Kind::Sstate, Some(SystemTime::now()));
+        touch(
+            &leaf.join(second),
+            SystemTime::now() + Duration::from_secs(1),
+        );
+        assert_eq!(
+            keys(&mut recent),
+            [format!("ab/cd/{second}")],
+            "old files are skipped"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 }
