@@ -20,8 +20,8 @@ inputs:
     description: The DL_DIR to upload new downloads from after the job
     default: ""
   client:
-    description: The calf-granary-client program that uploads
-    default: calf-granary-client
+    description: The calf-granary-client program that uploads. By default the action downloads the matching release.
+    default: ""
 outputs:
   tier:
     description: The tier that the job's ID token mapped to

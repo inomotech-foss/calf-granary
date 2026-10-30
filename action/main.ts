@@ -4,6 +4,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { assetName, installClient } from "./client.ts";
 import { bitbakeConfig, netrc, nixConfig, replaceBlock } from "./config.ts";
 import {
   type CacheInfo,
@@ -43,11 +44,33 @@ async function obtainToken(server: string): Promise<Issued | undefined> {
   }
 }
 
+/** Gets a token if the job can upload, or warns and returns nothing. */
+async function obtainUploadToken(server: string): Promise<Issued | undefined> {
+  if (input("client") !== "") {
+    return await obtainToken(server);
+  }
+  const asset = assetName(process.platform, process.arch);
+  if (asset === undefined) {
+    warning(
+      `calf-granary: there is no client for ${process.platform} ${process.arch}, ` +
+        "reading the public caches without uploading",
+    );
+    return undefined;
+  }
+  const issued = await obtainToken(server);
+  if (issued !== undefined) {
+    const cacheDir =
+      process.env["RUNNER_TOOL_CACHE"] || process.env["RUNNER_TEMP"] || "/tmp";
+    saveState("client", await installClient(asset, cacheDir));
+  }
+  return issued;
+}
+
 /** Sets up the caches. */
 async function main(): Promise<void> {
   const started = Math.floor(Date.now() / 1000);
   const server = requiredInput("server");
-  const issued = await obtainToken(server);
+  const issued = await obtainUploadToken(server);
   const caches = writableFirst(issued?.caches ?? (await publicCaches(server)));
   if (issued !== undefined) {
     saveState("token", issued.token);

@@ -17,7 +17,7 @@ async function post(): Promise<void> {
   const caches = (JSON.parse(state("caches")) as CacheInfo[]).filter(
     (cache) => cache.access === "write",
   );
-  const client = input("client") || "calf-granary-client";
+  const client = input("client") || state("client");
   const env = {
     ...process.env,
     GRANARY_SERVER: input("server"),
