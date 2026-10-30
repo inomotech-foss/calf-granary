@@ -2,6 +2,7 @@
 
 mod nix;
 mod nix_push;
+mod scan;
 mod target;
 mod watch;
 mod yocto;

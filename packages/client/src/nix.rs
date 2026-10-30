@@ -1,10 +1,11 @@
 //! Asking the local Nix installation about store paths.
 
-use std::collections::{BTreeMap, HashMap, HashSet, btree_map};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, btree_map};
 use std::io;
 use std::process::Stdio;
 
 use serde::Deserialize;
+use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::process::{Child, Command};
 
 /// What Nix knows about a store path, as `nix path-info --json` prints it.
@@ -32,6 +33,9 @@ pub(crate) enum NixError {
     /// Nix printed something unexpected.
     #[error("failed to parse the output of nix")]
     Parse(#[source] serde_json::Error),
+    /// The output of Nix can't be read.
+    #[error("failed to read the output of nix")]
+    Read(#[source] io::Error),
     /// Nix couldn't be started.
     #[error("failed to run nix")]
     Spawn(#[source] io::Error),
@@ -65,7 +69,7 @@ impl Systems {
     ///
     /// Derivations that aren't in the store, such as those of substituted
     /// paths, are left out.
-    pub(crate) async fn read(derivations: &[&str]) -> Result<Self, NixError> {
+    pub(crate) async fn read(derivations: &BTreeSet<&str>) -> Result<Self, NixError> {
         if derivations.is_empty() {
             return Ok(Self::None);
         }
@@ -206,26 +210,34 @@ impl Closure {
     }
 }
 
-/// Lists every valid path in the store.
-pub(crate) async fn all_paths() -> Result<Vec<String>, NixError> {
-    let output = Command::new("nix")
+/// Calls `found` with every valid path in the store, while Nix lists them.
+pub(crate) async fn each_path<F>(mut found: F) -> Result<(), NixError>
+where
+    F: FnMut(&str),
+{
+    let mut child = Command::new("nix")
         .args([
             "--extra-experimental-features",
             "nix-command",
             "path-info",
             "--all",
         ])
+        .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
-        .output()
-        .await
+        .kill_on_drop(true)
+        .spawn()
         .map_err(NixError::Spawn)?;
-    if !output.status.success() {
+    let stdout = child.stdout.take().ok_or(NixError::Failed)?;
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::new();
+    while reader.read_line(&mut line).await.map_err(NixError::Read)? != 0 {
+        found(line.trim_end());
+        line.clear();
+    }
+    if !child.wait().await.map_err(NixError::Read)?.success() {
         return Err(NixError::Failed);
     }
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::to_owned)
-        .collect())
+    Ok(())
 }
 
 /// Starts writing the NAR of a store path to the child's stdout.

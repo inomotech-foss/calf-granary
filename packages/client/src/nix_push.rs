@@ -80,7 +80,7 @@ impl PushArgs {
             self.target.connection(),
             self.target.cache(),
             &self.paths,
-            &HashSet::new(),
+            |_| false,
         )
         .await?;
         Ok(())
@@ -174,41 +174,35 @@ pub(crate) enum PushError {
 }
 
 /// Uploads the closure of `paths` to `cache`, except what the cache has and
-/// the paths in `cached`. Returns the store paths of the closure.
-pub(crate) async fn push(
+/// the paths that are `cached`. Returns the closure.
+pub(crate) async fn push<F>(
     connection: &Connection,
     cache: &str,
     paths: &[String],
-    cached: &HashSet<String>,
-) -> Result<Vec<String>, PushError> {
+    cached: F,
+) -> Result<Closure, PushError>
+where
+    F: Fn(&str) -> bool + Sync,
+{
     let closure = Closure::of(paths).await?;
     let derivations: BTreeSet<&str> = closure
         .iter()
         .filter_map(|(_, info)| info.deriver.as_deref())
         .collect();
-    let derivations: Vec<&str> = derivations.into_iter().collect();
-    let hashes: Vec<&str> = closure
-        .iter()
-        .filter(|(path, _)| !cached.contains(*path))
-        .filter_map(|(path, _)| nix::hash_part(path))
-        .collect();
     let http = Client::new();
     let missing_url = connection.url(["_api", "nix", cache, "missing"]);
-    let mut missing = HashSet::new();
-    for batch in hashes.chunks(MISSING_BATCH) {
-        let answer: Missing = http
-            .post(missing_url.clone())
-            .bearer_auth(connection.token())
-            .json(&MissingRequest { hashes: batch })
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(PushError::Missing)?
-            .json()
-            .await
-            .map_err(PushError::Missing)?;
-        missing.extend(answer.missing);
-    }
+    let hashes = closure
+        .iter()
+        .filter(|(path, _)| !cached(path))
+        .filter_map(|(path, _)| nix::hash_part(path));
+    let missing = stream::iter(hashes)
+        .chunks(MISSING_BATCH)
+        .then(|batch| ask_missing(&http, &missing_url, connection.token(), batch))
+        .try_fold(HashSet::new(), async |mut missing, batch| {
+            missing.extend(batch);
+            Ok(missing)
+        })
+        .await?;
     tracing::info!(
         closure = closure.len(),
         missing = missing.len(),
@@ -221,14 +215,35 @@ pub(crate) async fn push(
         systems: Systems::read(&derivations).await?,
     };
     let rounds = closure.rounds(|path| {
-        !cached.contains(path) && nix::hash_part(path).is_some_and(|hash| missing.contains(hash))
+        nix::hash_part(path).is_some_and(|hash| missing.contains(hash)) && !cached(path)
     });
     for round in rounds {
         stream::iter(round)
             .map(|(path, info)| uploader.upload(path, info))
             .buffer_unordered(connection.jobs())
-            .try_collect::<Vec<()>>()
+            .try_collect::<()>()
             .await?;
     }
-    Ok(closure.iter().map(|(path, _)| path.clone()).collect())
+    Ok(closure)
+}
+
+/// Asks the cache which store paths of a batch it lacks.
+async fn ask_missing(
+    http: &Client,
+    url: &Url,
+    token: &str,
+    hashes: Vec<&str>,
+) -> Result<Vec<String>, PushError> {
+    let answer: Missing = http
+        .post(url.clone())
+        .bearer_auth(token)
+        .json(&MissingRequest { hashes: &hashes })
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(PushError::Missing)?
+        .json()
+        .await
+        .map_err(PushError::Missing)?;
+    Ok(answer.missing)
 }

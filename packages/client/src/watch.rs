@@ -2,18 +2,20 @@
 
 use core::error::Error;
 use core::time::Duration;
-use std::collections::HashSet;
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{self, BufRead as _, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{fs, io};
 
 use clap::Args;
 use tokio::{task, time};
 
 use crate::nix::{self, NixError};
 use crate::nix_push::{self, PushError};
+use crate::scan::Scanner;
 use crate::target::Connection;
-use crate::yocto::{self, FilesError, Kind, Scanner};
+use crate::yocto::{self, FilesError, Kind};
 
 /// Command-line arguments of `watch`.
 #[derive(Debug, Args)]
@@ -58,10 +60,8 @@ pub(crate) struct WatchArgs {
 struct NixWatch {
     /// The cache.
     cache: String,
-    /// The store paths that were seen before.
-    known: HashSet<String>,
-    /// The store paths that the cache has.
-    uploaded: HashSet<String>,
+    /// The store paths that were seen, and whether the cache has them.
+    paths: HashMap<String, bool>,
 }
 
 /// New files in a directory to upload.
@@ -71,8 +71,6 @@ struct FilesWatch {
     cache: String,
     /// The directory.
     scanner: Scanner,
-    /// The keys that the cache has.
-    uploaded: HashSet<String>,
 }
 
 impl WatchArgs {
@@ -82,12 +80,14 @@ impl WatchArgs {
         let mut nix = match (self.nix_cache, self.known_paths) {
             (Some(cache), Some(file)) => Some(NixWatch {
                 cache,
-                known: fs::read_to_string(&file)
-                    .map_err(|source| WatchError::KnownPaths { file, source })?
-                    .lines()
-                    .map(str::to_owned)
-                    .collect(),
-                uploaded: HashSet::new(),
+                paths: File::open(&file)
+                    .and_then(|known| {
+                        BufReader::new(known)
+                            .lines()
+                            .map(|path| Ok((path?, false)))
+                            .collect()
+                    })
+                    .map_err(|source| WatchError::KnownPaths { file, source })?,
             }),
             _ => None,
         };
@@ -103,7 +103,6 @@ impl WatchArgs {
             Some(FilesWatch {
                 cache: cache?,
                 scanner: Scanner::new(dir?, kind, since),
-                uploaded: HashSet::new(),
             })
         })
         .collect();
@@ -131,38 +130,41 @@ impl WatchArgs {
 impl NixWatch {
     /// Pushes the store paths that appeared since the last pass.
     async fn pass(&mut self, connection: &Connection) -> Result<(), WatchError> {
-        let new: Vec<String> = nix::all_paths()
-            .await?
-            .into_iter()
-            .filter(|path| {
-                !self.known.contains(path)
-                    && Path::new(path).extension().is_none_or(|ext| ext != "drv")
-            })
-            .collect();
+        let mut new = Vec::new();
+        nix::each_path(|path| {
+            let derivation = Path::new(path).extension().is_some_and(|ext| ext == "drv");
+            if !derivation && !self.paths.contains_key(path) {
+                new.push(path.to_owned());
+            }
+        })
+        .await?;
         if new.is_empty() {
             return Ok(());
         }
-        let closure = nix_push::push(connection, &self.cache, &new, &self.uploaded).await?;
-        self.known.extend(new);
-        self.uploaded.extend(closure);
+        let closure = nix_push::push(connection, &self.cache, &new, |path| {
+            self.paths.get(path).copied().unwrap_or(false)
+        })
+        .await?;
+        self.paths.extend(new.into_iter().map(|path| (path, false)));
+        for (path, _) in closure.iter() {
+            if let Some(cached) = self.paths.get_mut(path) {
+                *cached = true;
+            }
+        }
         Ok(())
     }
 }
 
 impl FilesWatch {
-    /// Uploads the settled files that appeared since the last pass.
+    /// Uploads the settled files that the cache doesn't have yet.
     async fn pass(&mut self, connection: &Connection, settle: Duration) -> Result<(), WatchError> {
-        let found = task::block_in_place(|| self.scanner.scan()).map_err(FilesError::Walk)?;
+        task::block_in_place(|| self.scanner.scan()).map_err(FilesError::Walk)?;
         let settled = SystemTime::now().checked_sub(settle).unwrap_or(UNIX_EPOCH);
-        let new: Vec<_> = found
-            .into_iter()
-            .filter(|file| file.modified <= settled && !self.uploaded.contains(&file.key))
-            .collect();
-        if new.is_empty() {
-            return Ok(());
-        }
-        yocto::push(connection, &self.cache, &new).await?;
-        self.uploaded.extend(new.into_iter().map(|file| file.key));
+        let new = self
+            .scanner
+            .files()
+            .filter(|file| !file.is_cached() && file.modified <= settled);
+        yocto::push(connection, &self.cache, new).await?;
         Ok(())
     }
 }
