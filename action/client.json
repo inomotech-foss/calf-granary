@@ -1,7 +1,7 @@
 {
-  "version": "0.1.1",
+  "version": "0.2.0",
   "digests": {
-    "x86_64-unknown-linux-musl": "",
-    "aarch64-unknown-linux-musl": ""
+    "x86_64-unknown-linux-musl": "43329c04fc6dfe1a6ccfa863888f3c950c37c3bf0b9fa2dabc88c8d7382309fe",
+    "aarch64-unknown-linux-musl": "b7789bf289a3d76d209a0ef9562d8ead5948cb4bb75e663d301253ac21c278fd"
   }
 }
