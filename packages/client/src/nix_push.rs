@@ -243,6 +243,7 @@ where
                 .iter()
                 .any(|reference| failed.contains(reference));
             if !ready {
+                tracing::info!(path, "skipped because a reference failed");
                 blocked.push(*path);
             }
             ready

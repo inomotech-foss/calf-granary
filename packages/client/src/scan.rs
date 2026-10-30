@@ -155,8 +155,7 @@ impl Dir {
         since: Option<SystemTime>,
         modified: SystemTime,
     ) -> io::Result<()> {
-        self.read_at = SystemTime::now();
-        self.modified = Some(modified);
+        let read_at = SystemTime::now();
         let mut subdirs = Vec::new();
         let mut files = Vec::new();
         for entry in fs::read_dir(&self.path)? {
@@ -164,12 +163,17 @@ impl Dir {
             let Ok(name) = entry.file_name().into_string() else {
                 continue;
             };
-            let metadata = entry.metadata()?;
-            if metadata.is_dir() {
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
                 if kind == Kind::Sstate {
                     subdirs.push((entry.path(), name));
                 }
-            } else if metadata.is_file() && kind.wants(&name) {
+            } else if kind.wants(&name) {
+                let metadata = match entry.metadata() {
+                    Ok(metadata) if metadata.is_file() => metadata,
+                    Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
+                    _ => continue,
+                };
                 let file_modified = metadata.modified()?;
                 if since.is_none_or(|since| file_modified >= since) {
                     files.push(Entry {
@@ -201,6 +205,8 @@ impl Dir {
             }
         }
         self.files = files;
+        self.modified = Some(modified);
+        self.read_at = read_at;
         Ok(())
     }
 
@@ -345,4 +351,5 @@ mod tests {
         );
         fs::remove_dir_all(root).unwrap();
     }
+
 }

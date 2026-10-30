@@ -143,12 +143,23 @@ impl NixWatch {
         if self.pending.is_empty() {
             return Ok(());
         }
-        let pushed = nix_push::push(connection, &self.cache, &self.pending, |path| {
+        let pushed = match nix_push::push(connection, &self.cache, &self.pending, |path| {
             nix::hash_part(path)
                 .and_then(|hash| self.paths.get(hash))
                 .is_some_and(|cached| *cached)
         })
-        .await?;
+        .await
+        {
+            Ok(pushed) => pushed,
+            Err(err) => {
+                for path in self.pending.drain(..) {
+                    if let Some(hash) = nix::hash_part(&path) {
+                        self.paths.remove(hash);
+                    }
+                }
+                return Err(err.into());
+            }
+        };
         for (path, _) in pushed.closure.iter() {
             if !pushed.failed.contains(path)
                 && let Some(cached) = nix::hash_part(path).and_then(|hash| self.paths.get_mut(hash))
