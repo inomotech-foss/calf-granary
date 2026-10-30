@@ -2,6 +2,7 @@
 
 use core::time::Duration;
 use std::fs;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 
 use reqwest::StatusCode;
@@ -24,8 +25,8 @@ fallback = "main"
 const SSTATE: &str =
     "ab/cd/sstate:zlib:core2-64-poky-linux:1.3:r0:core2-64:11:abcd_populate_sysroot.tar.zst";
 
-/// Runs a client command and returns its log.
-async fn client(server: &Server, token: &str, args: &[&str]) -> String {
+/// Runs a client command and returns whether it succeeded and its log.
+async fn run_client(server: &Server, token: &str, args: &[&str]) -> (bool, String) {
     let output = Command::new(client_bin())
         .args(args)
         .env("GRANARY_SERVER", server.url(""))
@@ -34,8 +35,21 @@ async fn client(server: &Server, token: &str, args: &[&str]) -> String {
         .await
         .unwrap();
     let log = String::from_utf8_lossy(&output.stderr).into_owned();
-    assert!(output.status.success(), "the client failed: {log}");
+    (output.status.success(), log)
+}
+
+/// Runs a client command and returns its log.
+async fn client(server: &Server, token: &str, args: &[&str]) -> String {
+    let (success, log) = run_client(server, token, args).await;
+    assert!(success, "the client failed: {log}");
     log
+}
+
+/// Makes a file unreadable. Returns false if it stays readable, which it does
+/// for root.
+fn lock(path: &Path) -> bool {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o000)).unwrap();
+    fs::File::open(path).is_err()
 }
 
 /// Pushes a directory to a cache and returns the client's log.
@@ -178,6 +192,99 @@ async fn uploads_while_watching() {
     assert!(
         wait_cached(&server, &format!("pr/{second}")).await,
         "files in new directories are uploaded"
+    );
+    terminate(&mut watcher).await;
+    assert!(server.stop().await.success(), "serve stops cleanly");
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres and object storage"]
+async fn uploads_the_other_files_after_a_failure() {
+    let stack = Stack::new(CACHES).await;
+    stack.migrate().await;
+    let server = stack.serve().await;
+    let sstate = stack.dir().join("sstate");
+    let locked = SSTATE.replace("abcd_", "ef01_");
+    for name in [SSTATE, &locked] {
+        let path = sstate.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "sstate").unwrap();
+    }
+    if !lock(&sstate.join(&locked)) {
+        eprintln!("skipped: root reads unreadable files");
+        return;
+    }
+    let token = stack.token(&["pr"]).await;
+    let dir = sstate.display().to_string();
+    let (success, log) = run_client(
+        &server,
+        &token,
+        &["yocto", "push-sstate", "--cache", "pr", "--dir", &dir],
+    )
+    .await;
+    assert!(!success, "the client fails: {log}");
+    assert!(
+        log.contains("failed to upload 1 files"),
+        "the failures are counted: {log}"
+    );
+    assert_eq!(
+        status(&server, &format!("pr/{SSTATE}")).await,
+        StatusCode::OK,
+        "the other files are uploaded"
+    );
+    assert_eq!(
+        status(&server, &format!("pr/{locked}")).await,
+        StatusCode::NOT_FOUND,
+        "the failed file isn't stored"
+    );
+    assert!(server.stop().await.success(), "serve stops cleanly");
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres and object storage"]
+async fn retries_failed_files_while_watching() {
+    let stack = Stack::new(CACHES).await;
+    stack.migrate().await;
+    let server = stack.serve().await;
+    let sstate = stack.dir().join("sstate");
+    let locked = SSTATE.replace("abcd_", "ef01_");
+    for name in [SSTATE, &locked] {
+        let path = sstate.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "sstate").unwrap();
+    }
+    if !lock(&sstate.join(&locked)) {
+        eprintln!("skipped: root reads unreadable files");
+        return;
+    }
+    let token = stack.token(&["pr"]).await;
+    let mut watcher = Command::new(client_bin())
+        .args(["watch", "--interval", "1", "--settle", "0"])
+        .args(["--sstate-cache", "pr", "--sstate-dir"])
+        .arg(&sstate)
+        .env("GRANARY_SERVER", server.url(""))
+        .env("GRANARY_TOKEN", &token)
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+
+    assert!(
+        wait_cached(&server, &format!("pr/{SSTATE}")).await,
+        "the other files are uploaded"
+    );
+    assert_eq!(
+        status(&server, &format!("pr/{locked}")).await,
+        StatusCode::NOT_FOUND,
+        "the failed file isn't stored"
+    );
+    fs::set_permissions(sstate.join(&locked), fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(
+        wait_cached(&server, &format!("pr/{locked}")).await,
+        "failed files are retried"
+    );
+    assert!(
+        watcher.try_wait().unwrap().is_none(),
+        "the watcher keeps running"
     );
     terminate(&mut watcher).await;
     assert!(server.stop().await.success(), "serve stops cleanly");

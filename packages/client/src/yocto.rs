@@ -304,10 +304,14 @@ mod tests {
             Kind::Downloads.wants("git2_github.com.madler.zlib.git.tar.gz"),
             "mirror tarballs are uploaded"
         );
-        assert!(
-            Kind::Downloads.wants("tmpwatch-2.11.tar.bz2"),
-            "only temporary names are skipped"
-        );
+        for name in [
+            "tmpwatch-2.11.tar.bz2",
+            "tmpa8b_q2z",
+            "tmpa8b_q2z01",
+            "tmpA8b_q2z0",
+        ] {
+            assert!(Kind::Downloads.wants(name), "{name} isn't a temporary name");
+        }
         for name in [
             "zlib-1.3.1.tar.xz.done",
             "zlib-1.3.1.tar.xz.lock",

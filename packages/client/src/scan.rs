@@ -270,6 +270,7 @@ impl<'a> Iterator for Files<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write as _;
     use std::path::Path;
     use std::{env, process};
 
@@ -352,4 +353,54 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn restats_unsettled_files() {
+        let root = env::temp_dir().join(format!("granary-restat-{}", process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let [growing, vanishing, uploaded] =
+            ["growing.tar.xz", "vanishing.tar.xz", "uploaded.tar.xz"];
+        let past = SystemTime::now() - Duration::from_hours(1);
+        for name in [growing, vanishing, uploaded] {
+            fs::write(root.join(name), "partial").unwrap();
+            touch(&root.join(name), past);
+        }
+        touch(&root, past);
+        let mut scanner = Scanner::new(root.clone(), Kind::Downloads, None);
+        scanner.scan().unwrap();
+        let modified = |scanned: &Scanner, name: &str| {
+            scanned
+                .files()
+                .find(|file| file.key() == name)
+                .map(File::modified)
+        };
+        for file in scanner.files().filter(|file| file.key() == uploaded) {
+            file.set_cached(true);
+        }
+
+        fs::OpenOptions::new()
+            .append(true)
+            .open(root.join(growing))
+            .unwrap()
+            .write_all(b" more")
+            .unwrap();
+        fs::remove_file(root.join(vanishing)).unwrap();
+        touch(&root.join(uploaded), past + Duration::from_secs(1));
+        touch(&root, past);
+        scanner.scan().unwrap();
+        let settled = SystemTime::now() - Duration::from_mins(1);
+        assert!(
+            modified(&scanner, growing).is_some_and(|modified| modified > settled),
+            "files written in unchanged directories aren't settled"
+        );
+        assert!(
+            modified(&scanner, vanishing).is_some_and(|modified| modified > settled),
+            "files that vanished aren't settled"
+        );
+        assert_eq!(
+            modified(&scanner, uploaded),
+            Some(past),
+            "cached files aren't read again"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 }
