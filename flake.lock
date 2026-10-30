@@ -48,11 +48,11 @@
         "vale-ai-tells": "vale-ai-tells"
       },
       "locked": {
-        "lastModified": 1793330289,
-        "narHash": "sha256-mkYnKSGrPvG0OzbcR6HPFDlYtRQN6aH5PsYcc3rmfTk=",
+        "lastModified": 1793333433,
+        "narHash": "sha256-NJqImI+xk8U9UP8NXMc9YWbFDjeQiXWsZOBThjOO1BE=",
         "ref": "refs/heads/main",
-        "rev": "05ee8dc0c9b688944de94479c7382e87df49cb83",
-        "revCount": 1654,
+        "rev": "07164910040eeb452b82644379ec300287f9777e",
+        "revCount": 1655,
         "type": "git",
         "url": "https://codeberg.org/inomotech/ephemeris"
       },
