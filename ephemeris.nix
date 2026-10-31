@@ -10,12 +10,14 @@ in
 {
   ephemeris = {
     project = {
-      name = "calf-granary";
       description = "Build caches for CI runners";
       license = lib.licenses.agpl3Plus;
     };
     repository = {
-      forge = "forgejo";
+      remote = {
+        host = "codeberg.org";
+        name = "calf-granary";
+      };
       forgejo.branchRules.rules.main = {
         push = "whitelist";
         pushWhitelistUsernames = [ "scootermon" ];

@@ -13,16 +13,16 @@ jobs:
       summary: ${{ steps.summary.outputs.markdown }}
     enable-openid-connect: true
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          fetch-depth: 0
-          persist-credentials: false
+          fetch-depth: '0'
+          persist-credentials: 'false'
       - name: Install Nix
         uses: https://github.com/cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
         with:
           install_options: '--yes'
       - name: Set up the build cache
-        uses: https://codeberg.org/inomotech/calf-granary@d16ce853bb13d44abc37e4521ae795cf2f9e0c55
+        uses: https://codeberg.org/inomotech/calf-granary@e2288dc6330373bb33d89a9bc710efaf2756b907
         with:
           audience: calf-granary
           server: https://granary.svc.inomo.tech
@@ -32,6 +32,8 @@ jobs:
       - id: checks
         name: Run enabled applicable checks
         run: nix run .#ephemeris-check -- run-applicable --context checkout
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Run flake checks
         run: nix flake check -L
       - id: summary
@@ -51,15 +53,15 @@ jobs:
     if: ${{ !cancelled() }}
     enable-openid-connect: true
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          persist-credentials: false
+          persist-credentials: 'false'
       - name: Install Nix
         uses: https://github.com/cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
         with:
           install_options: '--yes'
       - name: Set up the build cache
-        uses: https://codeberg.org/inomotech/calf-granary@d16ce853bb13d44abc37e4521ae795cf2f9e0c55
+        uses: https://codeberg.org/inomotech/calf-granary@e2288dc6330373bb33d89a9bc710efaf2756b907
         with:
           audience: calf-granary
           server: https://granary.svc.inomo.tech
@@ -76,7 +78,7 @@ jobs:
         with:
           GITHUB_TOKEN: ${{ steps.credential.outputs.value }}
           comment_tag: pr-review
-          create_if_not_exists: false
+          create_if_not_exists: 'false'
           message: |-
             # Review
 
@@ -93,9 +95,9 @@ jobs:
       - name: Require upstream jobs
         run: test '${{ needs.checks.result }}' = success
       - if: ${{ always() }}
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          persist-credentials: false
+          persist-credentials: 'false'
         continue-on-error: true
       - name: Install Nix
         if: ${{ always() }}
@@ -105,7 +107,7 @@ jobs:
         continue-on-error: true
       - name: Set up the build cache
         if: ${{ always() }}
-        uses: https://codeberg.org/inomotech/calf-granary@d16ce853bb13d44abc37e4521ae795cf2f9e0c55
+        uses: https://codeberg.org/inomotech/calf-granary@e2288dc6330373bb33d89a9bc710efaf2756b907
         with:
           audience: calf-granary
           server: https://granary.svc.inomo.tech
@@ -126,7 +128,7 @@ jobs:
         with:
           GITHUB_TOKEN: ${{ steps.credential.outputs.value }}
           comment_tag: pr-review
-          create_if_not_exists: true
+          create_if_not_exists: 'true'
           message: |-
             # Review
 

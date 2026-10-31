@@ -4,7 +4,7 @@
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   dependencyDashboard: true,
   dependencyDashboardApproval: true,
-  enabledManagers: ["github-actions", "npm", "cargo", "nix"],
+  enabledManagers: ["npm", "cargo", "nix"],
   ignorePaths: [
     "**/node_modules/**",
     "**/bower_components/**",
@@ -32,31 +32,9 @@
   },
   packageRules: [
     {
-      description: "Pin Docker image digests",
-      matchDatasources: ["docker"],
-      pinDigests: true,
-    },
-    {
-      description: "Inomotech container images use immutable tags",
-      matchDatasources: ["docker"],
-      matchPackageNames: ["codeberg.org/inomotech/**"],
-      pinDigests: false,
-    },
-    {
       abandonmentThreshold: "1 year",
       description: "Detect dependencies abandoned for a year",
       matchPackageNames: ["*"],
-    },
-    {
-      description: "Pin action digests",
-      matchManagers: ["github-actions"],
-      pinDigests: true,
-    },
-    {
-      description: "Inomotech actions use immutable tags",
-      matchManagers: ["github-actions"],
-      matchPackageNames: ["inomotech/**", "https://codeberg.org/inomotech/**"],
-      pinDigests: false,
     },
     {
       description: "Reconcile Ephemeris after its flake input updates",
